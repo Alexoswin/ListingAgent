@@ -1,4 +1,8 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Request } from 'express';
+import { AuthGuard } from '../auth/auth.guard';
+import { AuthUser } from '../auth/auth.service';
+import { CreateListingDto } from './dto/create-listing.dto';
 import { ListingsService } from './listings.service';
 
 @Controller('listings')
@@ -18,5 +22,14 @@ export class ListingsController {
     );
 
     return this.listingsService.findAll(page, limit, category);
+  }
+
+  @Post()
+  @UseGuards(AuthGuard)
+  create(
+    @Req() request: Request & { user: AuthUser },
+    @Body() body: CreateListingDto,
+  ) {
+    return this.listingsService.create(request.user.id, body);
   }
 }

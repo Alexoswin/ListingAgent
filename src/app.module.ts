@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { ImagesModule } from './images/images.module';
 import { ListingsModule } from './listings/listings.module';
 import { ReviewsModule } from './reviews/reviews.module';
+import { UploadsModule } from './uploads/uploads.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { UsersModule } from './users/users.module';
     ListingsModule,
     ImagesModule,
     ReviewsModule,
+    UploadsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

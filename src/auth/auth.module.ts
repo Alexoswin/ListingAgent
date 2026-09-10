@@ -6,21 +6,19 @@ import { AuthController } from './auth.controller';
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 
+const jwtModule = JwtModule.registerAsync({
+  imports: [ConfigModule],
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => ({
+    secret: config.get<string>('JWT_SECRET') ?? 'development-only-secret',
+    signOptions: { expiresIn: '7d' },
+  }),
+});
+
 @Module({
-  imports: [
-    ConfigModule,
-    UsersModule,
-    JwtModule.registerAsync({
-      imports: [ConfigModule],
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') ?? 'development-only-secret',
-        signOptions: { expiresIn: '7d' },
-      }),
-    }),
-  ],
+  imports: [ConfigModule, UsersModule, jwtModule],
   controllers: [AuthController],
   providers: [AuthService, AuthGuard],
-  exports: [AuthService, AuthGuard],
+  exports: [AuthService, AuthGuard, jwtModule],
 })
 export class AuthModule {}
