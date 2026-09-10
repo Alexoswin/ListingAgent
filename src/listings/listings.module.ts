@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
+import { AgentModule } from '../agent/agent.module';
 import { AuthModule } from '../auth/auth.module';
 import { ImagesModule } from '../images/images.module';
 import { Listing, ListingSchema } from './schemas/listing.schema';
@@ -11,6 +12,7 @@ import { ListingsService } from './listings.service';
     MongooseModule.forFeature([{ name: Listing.name, schema: ListingSchema }]),
     ImagesModule,
     AuthModule,
+    AgentModule,
   ],
   controllers: [ListingsController],
   providers: [ListingsService],

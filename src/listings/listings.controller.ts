@@ -1,8 +1,18 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthUser } from '../auth/auth.service';
 import { CreateListingDto } from './dto/create-listing.dto';
+import { GenerateListingDto } from './dto/generate-listing.dto';
 import { Category } from './enums/category.enum';
 import { ListingsService } from './listings.service';
 
@@ -21,13 +31,16 @@ export class ListingsController {
       Math.max(Number.parseInt(limitParam, 10) || 6, 1),
       50,
     );
-    const validCategory = Object.values(Category).includes(
-      category as Category,
-    )
+    const validCategory = Object.values(Category).includes(category as Category)
       ? (category as Category)
       : undefined;
 
     return this.listingsService.findAll(page, limit, validCategory);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.listingsService.findOne(id);
   }
 
   @Post()
@@ -37,5 +50,15 @@ export class ListingsController {
     @Body() body: CreateListingDto,
   ) {
     return this.listingsService.create(request.user.id, body);
+  }
+
+  /** Drafts the listing with the agent, verifies it, and saves the result. */
+  @Post('generate')
+  @UseGuards(AuthGuard)
+  generate(
+    @Req() request: Request & { user: AuthUser },
+    @Body() body: GenerateListingDto,
+  ) {
+    return this.listingsService.generate(request.user.id, body);
   }
 }

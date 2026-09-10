@@ -51,13 +51,7 @@ export const CATEGORY_SPEC_HINTS: Partial<
       ],
     },
     [Subcategory.Phones]: {
-      specKeys: [
-        'Storage',
-        'RAM',
-        'Color',
-        'SIM Options',
-        'Country Variant',
-      ],
+      specKeys: ['Storage', 'RAM', 'Color', 'SIM Options', 'Country Variant'],
       conditionAspects: [
         'Screen cracks, scratches, or discoloration',
         'Back panel / frame dents or scratches',
@@ -159,11 +153,7 @@ export const CATEGORY_SPEC_HINTS: Partial<
 
   [Category.HomeAppliances]: {
     [Subcategory.Fridges]: {
-      specKeys: [
-        'Capacity (Liters)',
-        'Door Type',
-        'Star Rating',
-      ],
+      specKeys: ['Capacity (Liters)', 'Door Type', 'Star Rating'],
       conditionAspects: [
         'Dents, rust, or scratches on the body',
         'Door seal condition',
