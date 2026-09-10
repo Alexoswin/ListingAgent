@@ -18,12 +18,24 @@ export class User {
   @Prop({ lowercase: true, trim: true, unique: true, sparse: true })
   email?: string;
 
+  @Prop({ select: false })
+  passwordHash?: string;
+
+  @Prop({ default: false, index: true })
+  emailVerified: boolean;
+
+  @Prop({ select: false })
+  otpHash?: string;
+
+  @Prop({ select: false })
+  otpExpiresAt?: Date;
+
   @Prop({ trim: true, unique: true, sparse: true })
   phone?: string;
 
   @Prop({ enum: UserRole, default: UserRole.Seller, index: true })
   role: UserRole;
-  
+
   @Prop({ default: true, index: true })
   isActive: boolean;
 }
