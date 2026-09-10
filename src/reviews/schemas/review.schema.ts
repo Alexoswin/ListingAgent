@@ -5,6 +5,11 @@ import { User } from '../../users/schemas/user.schema';
 
 export type ReviewDocument = HydratedDocument<Review>;
 
+export enum ReviewVerdict {
+  AutoPublish = 'auto_publish',
+  HumanReviewNeeded = 'human_review_needed',
+}
+
 @Schema({ timestamps: true })
 export class Review {
   @Prop({
@@ -24,12 +29,12 @@ export class Review {
   reviewer: Types.ObjectId;
 
   @Prop({
-    type: Number,
+    type: String,
+    enum: ReviewVerdict,
     required: true,
-    min: 1,
-    max: 5,
+    index: true,
   })
-  rating: number;
+  verdict: ReviewVerdict;
 
   @Prop({
     type: String,
