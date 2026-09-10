@@ -1,0 +1,31 @@
+{
+  "listing_id": "EXAMPLE_001",
+  "category": "electronics",
+  "subcategory": "Laptops",
+  "seller": {
+    "title": "MacBook Pro 14 M2 Pro",
+    "description": "",
+    "price": 145000,
+    "original_price": null,
+    "brand": "Apple",
+    "model": "MacBook Pro 14 M2 Pro",
+    "year_purchased": "2023",
+    "specs": {
+      "ram": "16 GB",
+      "brand": "Apple",
+      "model": "MacBook Pro 14 M2 Pro",
+      "storage_capacity": "512 GB"
+    },
+    "condition_details": {
+      "bill_available": false,
+      "condition_issues": ["Minor scuffs on bottom case"],
+      "charger_available": "Original Charger Available",
+      "original_box_available": false
+    }
+  },
+  "images": [
+    "https://example.com/images/EXAMPLE_001/1.jpg",
+    "https://example.com/images/EXAMPLE_001/2.jpg",
+    "https://example.com/images/EXAMPLE_001/3.jpg"
+  ]
+}
