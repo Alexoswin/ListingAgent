@@ -54,6 +54,14 @@ export class Listing {
 
   @Prop({ type: String, enum: Subcategory, index: true })
   subcategory?: Subcategory;
+
+  /**
+   * Whether the listing is live on the marketplace. Stays false until the
+   * agent's verification pass returns `auto_publish`; a `human_review_needed`
+   * verdict leaves it false until a person clears it.
+   */
+  @Prop({ default: false, index: true })
+  publish: boolean;
 }
 
 export const ListingSchema = SchemaFactory.createForClass(Listing);

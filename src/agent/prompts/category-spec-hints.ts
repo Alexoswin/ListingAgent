@@ -67,6 +67,30 @@ export const CATEGORY_SPEC_HINTS: Partial<
         'Prior repair history',
       ],
     },
+    [Subcategory.Headphones]: {
+      specKeys: [
+        'Headphones Type',
+        'Noise Cancelling',
+        'Connectivity',
+        'Color',
+      ],
+      conditionAspects: [
+        'Ear tips / ear cups wear, discoloration, or tears',
+        'Charging case scuffs and hinge condition',
+        'All pieces present (both buds, case, tips, cable)',
+        'Charging and pairing behavior',
+        'Original box and bill included',
+      ],
+    },
+    [Subcategory.OtherTech]: {
+      specKeys: ['Product Type', 'Color', 'Power Source'],
+      conditionAspects: [
+        'Visible cracks, chips, or missing parts',
+        'Whether it powers on / operates as expected',
+        'Accessories, controller, or charger included',
+        'Original box and packaging',
+      ],
+    },
   },
 
   [Category.Furniture]: {
@@ -99,6 +123,36 @@ export const CATEGORY_SPEC_HINTS: Partial<
         'Mattress stains, sagging, or odor',
         'Signs of bed bugs, termites, or mould',
         'Storage mechanism functioning (if applicable)',
+      ],
+    },
+    [Subcategory.Wardrobes]: {
+      specKeys: ['Material', 'Dimensions', 'Door Count', 'Lockable'],
+      conditionAspects: [
+        'Scratches, dents, swelling, or water damage on panels',
+        'Door alignment, hinges, and handles',
+        'Shelves, rods, and drawers intact and sliding',
+        'Signs of termites or mould',
+      ],
+    },
+    [Subcategory.CoffeeTables]: {
+      specKeys: [
+        'Table Type',
+        'Tabletop Material',
+        'Frame Material',
+        'Dimensions',
+      ],
+      conditionAspects: [
+        'Tabletop scratches, chips, stains, or cracks',
+        'Frame/leg stability, rust, or wobble',
+        'Water rings or heat marks',
+      ],
+    },
+    [Subcategory.HomeDecor]: {
+      specKeys: ['Product Type', 'Material', 'Dimensions', 'Color'],
+      conditionAspects: [
+        'Chips, cracks, fading, or discoloration',
+        'All pieces of a set present',
+        'Mounting hardware or fittings included',
       ],
     },
   },

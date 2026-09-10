@@ -31,6 +31,7 @@ export class ListingsService {
       conditionDetails: 1,
       category: 1,
       subcategory: 1,
+      publish: 1,
     };
     const [items, total] = await Promise.all([
       this.listings
