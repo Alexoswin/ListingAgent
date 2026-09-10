@@ -2,6 +2,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { User } from '../../users/schemas/user.schema';
 import type { JsonRecord } from '../../common/types/json-value';
+import { Category, Subcategory } from '../enums/category.enum';
 
 export type ListingDocument = HydratedDocument<Listing>;
 
@@ -48,11 +49,11 @@ export class Listing {
   @Prop({ type: MongooseSchema.Types.Mixed, default: {} })
   conditionDetails: JsonRecord;
 
-  @Prop({ trim: true, required: true, index: true })
-  category: string;
+  @Prop({ type: String, enum: Category, required: true, index: true })
+  category: Category;
 
-  @Prop({ trim: true, index: true })
-  subcategory?: string;
+  @Prop({ type: String, enum: Subcategory, index: true })
+  subcategory?: Subcategory;
 }
 
 export const ListingSchema = SchemaFactory.createForClass(Listing);

@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Image, ImageDocument } from '../images/schemas/image.schema';
 import { CreateListingDto } from './dto/create-listing.dto';
+import { Category } from './enums/category.enum';
 import { Listing, ListingDocument } from './schemas/listing.schema';
 
 @Injectable()
@@ -14,8 +15,8 @@ export class ListingsService {
     private readonly images: Model<ImageDocument>,
   ) {}
 
-  async findAll(page: number, limit: number, category?: string) {
-    const filter = category ? { category: category.trim() } : {};
+  async findAll(page: number, limit: number, category?: Category) {
+    const filter = category ? { category } : {};
     const skip = (page - 1) * limit;
     const projection = {
       _id: 1,

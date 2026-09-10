@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsObject,
@@ -10,6 +11,7 @@ import {
   IsString,
   IsUrl,
 } from 'class-validator';
+import { Category, Subcategory } from '../enums/category.enum';
 
 export class CreateListingDto {
   @IsString()
@@ -49,13 +51,12 @@ export class CreateListingDto {
   @IsObject()
   conditionDetails?: Record<string, unknown>;
 
-  @IsString()
-  @IsNotEmpty()
-  category: string;
+  @IsEnum(Category)
+  category: Category;
 
   @IsOptional()
-  @IsString()
-  subcategory?: string;
+  @IsEnum(Subcategory)
+  subcategory?: Subcategory;
 
   @IsOptional()
   @IsArray()

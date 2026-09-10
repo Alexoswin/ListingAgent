@@ -2,13 +2,14 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import { UserSchema, UserRole } from '../users/schemas/user.schema';
 import { ListingSchema } from '../listings/schemas/listing.schema';
+import { Category, Subcategory } from '../listings/enums/category.enum';
 
 const categories = [
-  { category: 'Electronics', subcategory: 'Smartphones' },
-  { category: 'Electronics', subcategory: 'Laptops' },
-  { category: 'Furniture', subcategory: 'Sofas' },
-  { category: 'Vehicles', subcategory: 'Bicycles' },
-  { category: 'Home Appliances', subcategory: 'Refrigerators' },
+  { category: Category.Electronics, subcategory: Subcategory.Phones },
+  { category: Category.Electronics, subcategory: Subcategory.Laptops },
+  { category: Category.Furniture, subcategory: Subcategory.Sofas },
+  { category: Category.Furniture, subcategory: Subcategory.Beds },
+  { category: Category.HomeAppliances, subcategory: Subcategory.Fridges },
 ];
 
 const brands = ['Samsung', 'Apple', 'Sony', 'IKEA', 'Trek', 'LG', 'Dell', 'HP'];
