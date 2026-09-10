@@ -30,6 +30,7 @@ npm run lint            # eslint
 | `OPENAI_API_KEY` | LLM provider key used for generation/verification |
 | `MODEL` | Model name to use (e.g. `gpt-4-turbo`) |
 | `SEARCH_API_KEY` | Optional key for product-lookup/web search tool |
+| `MONGO_URI` | MongoDB connection string |
 | `PORT` | Server port (default `3000`) |
 
 See [.env.example](./.env.example) for the full list.
@@ -37,18 +38,19 @@ See [.env.example](./.env.example) for the full list.
 ## Stack
 
 - [NestJS](https://nestjs.com/) (TypeScript)
+- MongoDB with Mongoose schemas
 - Node.js 18+
 
 ## Project Structure
 
 ```
 src/
-├── agent/           # listing generation & verification logic (LLM orchestration)
-├── listings/         # listing CRUD / status endpoints
-├── images/           # image fetching from seller-supplied URLs
-├── verification/     # review pipeline, auto_publish vs human_review_needed decision
+├── listings/         # listing entity and seller-submission/generated-PDP fields
+├── users/            # marketplace user entity
+├── images/           # image entity and analysis metadata
+├── reviews/          # verification review entity and verdict/check fields
 ├── app.module.ts
 └── main.ts
 ```
 
-> Note: this is the initial scaffold. `agent`, `listings`, `images`, and `verification` modules are not yet implemented — see the root README for the intended design.
+The current backend includes the MongoDB entity modules. Agent orchestration and CRUD endpoints can be layered on top of these schemas next.
