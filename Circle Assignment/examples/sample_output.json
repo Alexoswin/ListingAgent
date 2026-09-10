@@ -1,0 +1,25 @@
+{
+  "listing_id": "EXAMPLE_001",
+  "generated_pdp": {
+    "title": "Apple MacBook Pro 14\" M2 Pro · 16GB · 512GB · Lightly Used",
+    "description": "Apple MacBook Pro 14-inch (M2 Pro). Configured with 16GB memory and 512GB SSD based on visible markings. Device shows light wear consistent with Lightly Used: minor scuffs on the bottom case, screen clean with no dead pixels visible in photos. Battery health and bill availability could not be verified from images alone; seller indicates no bill and no original box.",
+    "original_mrp": 199900,
+    "specifications": [
+      { "key": "Brand", "value": "Apple", "confidence": 0.95 },
+      { "key": "Model", "value": "MacBook Pro 14\" (M2 Pro)", "confidence": 0.85 },
+      { "key": "RAM", "value": "16GB", "confidence": 0.7 },
+      { "key": "Storage", "value": "512GB", "confidence": 0.55 },
+      { "key": "Screen Size", "value": "14-inch", "confidence": 0.9 }
+    ],
+    "condition": {
+      "tier": "Lightly Used",
+      "visual_condition": "Minor scuffs visible on the bottom case; screen and keyboard deck look intact with no cracks or missing keys.",
+      "functional_condition": "Fully Functional",
+      "reasoning": "Visible handling wear (bottom case scuffs) rules out Like New; no functional defects visible in photos or noted in the seller's condition details."
+    }
+  },
+  "review": {
+    "verdict": "auto_publish",
+    "notes": "Everything in the title/description is either visible in the photos or matches a seller-provided field; nothing invented. One soft spot: 512GB storage comes from the seller's spec field, not something independently confirmed on-screen or via lookup, so treat that one value as lower-confidence. Nothing here looks fraudulent or like stock/catalogue imagery."
+  }
+}

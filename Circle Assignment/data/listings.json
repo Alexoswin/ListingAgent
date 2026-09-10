@@ -1,0 +1,485 @@
+[
+  {
+    "listing_id": "1",
+    "category": "electronics",
+    "subcategory": "Laptops",
+    "seller": {
+      "title": "ASUS Tuf f15",
+      "description": "",
+      "price": 95000,
+      "original_price": null,
+      "brand": "ASUS",
+      "model": "Tuf f15",
+      "year_purchased": "2024",
+      "specs": {
+        "os": "Windows",
+        "ram": "64 GB",
+        "brand": "ASUS",
+        "model": "Tuf f15",
+        "processor": "Intel i7, 13th gen, RTX 4060",
+        "screen_size": "15",
+        "storage_type": "SSD",
+        "storage_capacity": "512 GB"
+      },
+      "condition_details": {
+        "bill_available": true,
+        "what_s_included": [
+          "No included accessories"
+        ],
+        "condition_issues": [
+          "No functional issues"
+        ],
+        "charger_available": "Original Charger Available",
+        "select_battery_health": "Good (3-5 hours on a full charge)",
+        "original_box_available": true,
+        "brand_warranty_available": {
+          "year": "",
+          "month": "",
+          "exists": false
+        },
+        "has_this_device_been_repaired_before": false
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/ba854e13-ff7d-4061-bc0b-38c9566e6b0f.jpg",
+      "https://circlestore.b-cdn.net/product-images/efeea66f-6a42-4564-9998-bb6147cbc20a.jpg",
+      "https://circlestore.b-cdn.net/product-images/084fe1f7-5f0b-4c84-8638-ef6112cb65cd.jpg"
+    ]
+  },
+  {
+    "listing_id": "2",
+    "category": "electronics",
+    "subcategory": "Laptops",
+    "seller": {
+      "title": "Dell 7420 7 series i7 11 generation",
+      "description": "",
+      "price": 42999,
+      "original_price": null,
+      "brand": "Dell",
+      "model": "7420 7 series i7 11 generation",
+      "year_purchased": "Not Available",
+      "specs": {
+        "os": "Windows",
+        "ram": "16 GB",
+        "brand": "Dell",
+        "model": "7420 7 series i7 11 generation",
+        "processor": "I7 11 generation ",
+        "screen_size": 14,
+        "storage_type": "SSD",
+        "storage_capacity": "512 GB"
+      },
+      "condition_details": {
+        "bill_available": false,
+        "condition_issues": [
+          "No functional issues"
+        ],
+        "charger_available": "Original Charger Available",
+        "select_battery_health": "Good (3-5 hours on a full charge)",
+        "original_box_available": false,
+        "brand_warranty_available": {
+          "year": "",
+          "month": "",
+          "exists": false
+        },
+        "has_this_device_been_repaired_before": false
+      }
+    },
+    "images": [
+      "https://circlestore-s3.b-cdn.net/product-images/e674be66-6c74-49fb-9221-1f4807e5c058.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/aae1a403-a3c1-4556-9a92-b13b8f3899b6.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/f1d20d1c-6c8b-45b8-a7bd-6c5af228c258.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/0cc7674b-75b4-44aa-b4aa-d6da94dc6735.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/ede4cf52-5b10-4643-80e1-4a3e4cda87cd.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/6b28bf40-053e-4231-961b-5ea03a585e3c.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/ec0289ac-8949-4fef-a872-98032f6129c7.jpg"
+    ]
+  },
+  {
+    "listing_id": "3",
+    "category": "electronics",
+    "subcategory": "Headphones",
+    "seller": {
+      "title": "Apple Airpods Pro 2",
+      "description": "",
+      "price": 14000,
+      "original_price": null,
+      "brand": "Apple",
+      "model": "Airpods Pro 2",
+      "year_purchased": "2025",
+      "specs": {
+        "brand": "Apple",
+        "model": "Airpods Pro 2",
+        "headphones_type": "Wireless Earbuds",
+        "are_these_noise_cancelling_headphones": true
+      },
+      "condition_details": {
+        "bill_available": true,
+        "functional_issues": [
+          "No functional issues"
+        ],
+        "included_accessories": [
+          "Other"
+        ],
+        "brand_warranty_available": {
+          "year": "2026",
+          "month": "11",
+          "exists": true
+        },
+        "is_original_box_included": true
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/6ebf2feb-fa07-4da6-b407-d42b83046cec.jpg",
+      "https://circlestore.b-cdn.net/product-images/e4b51da6-3555-4e4a-b4d6-6e70ecac3156.jpg",
+      "https://circlestore.b-cdn.net/product-images/b4dd1f2f-9d44-42a0-8895-6a51a231b8dc.jpg"
+    ]
+  },
+  {
+    "listing_id": "4",
+    "category": "furniture",
+    "subcategory": "Sofas",
+    "seller": {
+      "title": "Royal Oak",
+      "description": "",
+      "price": 50000,
+      "original_price": null,
+      "brand": "Royal Oak",
+      "model": "",
+      "year_purchased": "Not Available",
+      "specs": {
+        "brand": "Royal Oak",
+        "material": "Velvet",
+        "recliner": false,
+        "sofa_type": "Sofa Set",
+        "seater_count": 6,
+        "what_s_included": [
+          "Only Sofa"
+        ],
+        "describe_the_sofa": "One 3 seater sofa, One 2 seater sofa and One 1 seater sofa. 3+2+1=6.",
+        "items_included_at_price": "3 brown sofas (total 6 seater) are included.",
+        "dimensions_of_the_largest_piece": {
+          "unit": "inches",
+          "width": "31",
+          "height": "35",
+          "length": "81"
+        }
+      },
+      "condition_details": {
+        "bill_available": false,
+        "deep_cleaning_required": "No Cleaning Required",
+        "stains_sagging_tears_cracks": [
+          "No known issues"
+        ]
+      }
+    },
+    "images": [
+      "https://circlestore-s3.b-cdn.net/product-images/042a8466-f322-4f83-906f-3eda7518a7dc.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/d000c66b-e9e7-42ed-bdb8-aab451a3567b.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/b05b3a76-99ba-4b14-ab3d-977363de0308.jpg"
+    ]
+  },
+  {
+    "listing_id": "5",
+    "category": "furniture",
+    "subcategory": "Home Decor",
+    "seller": {
+      "title": "Home Decor Listing",
+      "description": "",
+      "price": 1350,
+      "original_price": null,
+      "brand": "Unbranded",
+      "model": "Unavailable",
+      "year_purchased": "Not Available",
+      "specs": {
+        "brand": "Unbranded",
+        "product_type": "Multipurpose Bamboo Storage Basket / laundry Basket",
+        "type_of_home_decor": "Others",
+        "what_is_included_in_the_listed_price": "Bamboo Basket with 5cm in height and 4.3 cm in diameter "
+      },
+      "condition_details": {
+        "known_issues": [
+          "No Known Issues"
+        ]
+      }
+    },
+    "images": [
+      "https://circlestore-s3.b-cdn.net/product-images/da1c068b-ae54-4883-b955-c7a29c671c90.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/87f81497-34b1-43af-9395-846ef6b1bf68.jpg",
+      "https://circlestore-s3.b-cdn.net/product-images/f488cd0d-97c5-45b1-b478-ac81c5708bd6.jpg"
+    ]
+  },
+  {
+    "listing_id": "6",
+    "category": "furniture",
+    "subcategory": "Beds",
+    "seller": {
+      "title": "Unknown",
+      "description": "",
+      "price": 11000,
+      "original_price": null,
+      "brand": "Unknown",
+      "model": "",
+      "year_purchased": "2022",
+      "specs": {
+        "size": {
+          "unit": "inches",
+          "width": "36",
+          "length": "78"
+        },
+        "brand": "Unknown",
+        "size_2": "Single",
+        "storage": "Box",
+        "material": "Engineered Wood",
+        "mattress_type": "Foam",
+        "mattress_brand": "Sleepwell",
+        "mattress_included": true,
+        "mattress_thickness": {
+          "unit": "inches",
+          "thickness": "4"
+        },
+        "mattress_protective_cover_included": false
+      },
+      "condition_details": {
+        "bill_available": false,
+        "condition_issues": [
+          "Paint/Polish chips or scratches"
+        ],
+        "any_mattress_issues": [
+          "Stains"
+        ],
+        "mattress_original_bill_available": false,
+        "severity_and_location_of_the_issues_selected": "No",
+        "has_the_bed_ever_had_bed_bugs_termites_or_mould": "No"
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/39f9357b-4d94-4d88-a0ed-b746e6375271.jpg",
+      "https://circlestore.b-cdn.net/product-images/50b74674-57b7-4599-89db-20d8c6e81adf.jpg",
+      "https://circlestore.b-cdn.net/product-images/26394ba5-01e7-4f96-9f6a-6d4ffadd0363.jpg",
+      "https://circlestore.b-cdn.net/product-images/927178a4-8610-44e6-87c6-682bc4b78a87.jpg",
+      "https://circlestore.b-cdn.net/product-images/986c4c85-f884-4c0e-9f35-c915b2a9f3f2.jpg"
+    ]
+  },
+  {
+    "listing_id": "7",
+    "category": "home-appliances",
+    "subcategory": "Fridges",
+    "seller": {
+      "title": "Elanpro Fridge RF61G 60L Single Door Elanpro Fridge RF61G 60L Single Door",
+      "description": "",
+      "price": 5200,
+      "original_price": null,
+      "brand": "Elanpro Fridge RF61G 60L Single Door",
+      "model": "Elanpro Fridge RF61G 60L Single Door",
+      "year_purchased": "2020",
+      "specs": {
+        "brand": "Elanpro Fridge RF61G 60L Single Door",
+        "model": "Elanpro Fridge RF61G 60L Single Door",
+        "door_type": "Single Door",
+        "star_rating": "3 Star",
+        "capacity_liters": "60",
+        "what_s_included": [
+          "All Shelves / Racks"
+        ]
+      },
+      "condition_details": {
+        "known_issues": [
+          "No Known Issues"
+        ],
+        "bill_available": false,
+        "any_major_repairs_done": [
+          "No Major Repairs Done"
+        ]
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/8102ea8c-307c-49c5-a5ce-3084ae21e5fd.jpg",
+      "https://circlestore.b-cdn.net/product-images/07d9a22c-4a33-4e53-ab68-9acfe5a5e8e9.jpg",
+      "https://circlestore.b-cdn.net/product-images/ff3bbade-806f-438f-b6b7-d4383e9d053c.jpg",
+      "https://circlestore.b-cdn.net/product-images/4696f1f1-bb17-4b6e-8b82-26910d0eb228.jpg"
+    ]
+  },
+  {
+    "listing_id": "8",
+    "category": "home-appliances",
+    "subcategory": "Air Coolers",
+    "seller": {
+      "title": "Symphony Diet 22i",
+      "description": "",
+      "price": 2000,
+      "original_price": null,
+      "brand": "Symphony",
+      "model": "Diet 22i",
+      "year_purchased": "2016",
+      "specs": {
+        "brand": "Symphony ",
+        "model": "Diet 22i",
+        "capacity_in_litres": "22"
+      },
+      "condition_details": {
+        "known_issues": [
+          "No Known Issues"
+        ],
+        "bill_available": false
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/08e9e365-02e2-4092-a4c3-0465ea9ba7f5.jpg",
+      "https://circlestore.b-cdn.net/product-images/a72e2312-b119-4a36-9a17-18917431d03d.jpg",
+      "https://circlestore.b-cdn.net/product-images/cceded49-4142-4111-a49b-06476ec98702.jpg"
+    ]
+  },
+  {
+    "listing_id": "9",
+    "category": "electronics",
+    "subcategory": "Phones",
+    "seller": {
+      "title": "Oppo F33pro ",
+      "description": "",
+      "price": 38000,
+      "original_price": null,
+      "brand": "Oppo",
+      "model": "F33pro ",
+      "year_purchased": "2026",
+      "specs": {
+        "ram": "16 GB",
+        "color": "White ",
+        "storage": "128 GB",
+        "sim_options": "Physical SIM tray available",
+        "country_variant": "India"
+      },
+      "condition_details": {
+        "warranty": {
+          "year": "2027",
+          "month": "12",
+          "exists": true
+        },
+        "battery_health": "100%",
+        "bill_available": true,
+        "included_accessories": [
+          "Phone Case",
+          "Screen Protector"
+        ],
+        "original_box_included": "Yes",
+        "select_battery_condition": "Excellent",
+        "original_charger_available": "Cable and Adapter",
+        "has_this_device_been_repaired_before": {
+          "detail": "",
+          "exists": false
+        }
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/d13a43d1-754c-4717-b7f4-1e3ec12a6200.jpg",
+      "https://circlestore.b-cdn.net/product-images/16f674c2-bd37-4236-bbe2-47bfc1e0f69d.jpg",
+      "https://circlestore.b-cdn.net/product-images/44b93542-bceb-490d-8a4f-55d0e63b7476.jpg",
+      "https://circlestore.b-cdn.net/product-images/d24808df-cbec-44a3-a478-e8c81586d470.jpg",
+      "https://circlestore.b-cdn.net/product-images/df158432-a999-4610-a987-8422d99d2155.jpg",
+      "https://circlestore.b-cdn.net/product-images/189597f7-ef9c-40fb-b161-e276e4272a37.jpg",
+      "https://circlestore.b-cdn.net/product-images/4bf536a3-26ff-42b3-a0cd-38269f94d2cb.jpg"
+    ]
+  },
+  {
+    "listing_id": "10",
+    "category": "electronics",
+    "subcategory": "Other Tech",
+    "seller": {
+      "title": "Rc Flying Jet in Independence day Theme With Camera And Smoke",
+      "description": "",
+      "price": 3499,
+      "original_price": null,
+      "brand": "Unbranded",
+      "model": "Unavailable",
+      "year_purchased": "2026",
+      "specs": {
+        "brand": "Unbranded",
+        "what_are_you_selling": "Rc Flying Jet in Independence day Theme With Camera And Smoke "
+      },
+      "condition_details": {
+        "bill_available": false,
+        "condition_details": "Brand New Never Used "
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/2349213a-e277-4105-9c7f-5cd30154d7dc.png",
+      "https://circlestore.b-cdn.net/product-images/83728eed-0c91-4e31-9b7c-c2b255293c3e.png",
+      "https://circlestore.b-cdn.net/product-images/6769fc5c-fde2-484b-94ef-aa52079872c2.png",
+      "https://circlestore.b-cdn.net/product-images/42196432-3b45-44c9-b579-f2e3ba58ede2.png",
+      "https://circlestore.b-cdn.net/product-images/e88c87d9-e1f3-4d4b-bf40-b9c760c5234d.png"
+    ]
+  },
+  {
+    "listing_id": "11",
+    "category": "furniture",
+    "subcategory": "Wardrobes",
+    "seller": {
+      "title": "Carlton London",
+      "description": "",
+      "price": 15000,
+      "original_price": null,
+      "brand": "Carlton London",
+      "model": "",
+      "year_purchased": "2026",
+      "specs": {
+        "brand": "Carlton London",
+        "main_material": "Engineered Wood",
+        "is_it_lockable": false,
+        "dimensions_feet": {
+          "unit": "cm",
+          "width": "47.07",
+          "height": "176.14",
+          "length": "75.09"
+        }
+      },
+      "condition_details": {
+        "known_issues": [
+          "No Known Issues"
+        ]
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/db65cf02-640a-48d4-9055-69e54da115bf.jpg",
+      "https://circlestore.b-cdn.net/product-images/9cb52bee-4a2b-41b6-aa71-1c7cb8dcf1a6.jpg",
+      "https://circlestore.b-cdn.net/product-images/7fbe30d0-26c2-437f-9e28-4b6c6a14dcab.jpg",
+      "https://circlestore.b-cdn.net/product-images/b3ad0b04-bd48-49c2-881f-1c5c9bdb03f8.jpg",
+      "https://circlestore.b-cdn.net/product-images/3e627926-2832-4d47-8323-f702a7cca91b.jpg",
+      "https://circlestore.b-cdn.net/product-images/ea27ba9f-376c-41f3-bb7d-3b57362eaf1b.jpg"
+    ]
+  },
+  {
+    "listing_id": "12",
+    "category": "furniture",
+    "subcategory": "Coffee Tables",
+    "seller": {
+      "title": "Iron Wood",
+      "description": "",
+      "price": 15800,
+      "original_price": null,
+      "brand": "Iron",
+      "model": "Wood",
+      "year_purchased": "2025",
+      "specs": {
+        "brand": "Iron",
+        "model": "Wood",
+        "dimensions": {
+          "unit": "inches",
+          "width": "4",
+          "height": "3",
+          "length": "2"
+        },
+        "type_of_table": "Coffee / Centre / Tea Table",
+        "tabletop_material": "Solid Wood"
+      },
+      "condition_details": {
+        "known_issues": [
+          "No Known Issues"
+        ]
+      }
+    },
+    "images": [
+      "https://circlestore.b-cdn.net/product-images/21a2855d-55b6-4372-840e-bbbe28ca0b69.jpg",
+      "https://circlestore.b-cdn.net/product-images/fc089db0-e21c-4211-a859-746cfb99a0a0.jpg",
+      "https://circlestore.b-cdn.net/product-images/a8d07a72-8c33-4841-91da-5265d7a541b1.jpg"
+    ]
+  }
+]
