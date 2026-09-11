@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Category, Subcategory } from '../listings/enums/category.enum';
 
 /**
  * Every schema the agent uses, for both structured output and tool arguments.
@@ -99,6 +100,24 @@ export const productLookupSchema = z.strictObject({
 
 /** The generated product page, and the arguments to `submit_draft`. */
 export const pdpSchema = z.strictObject({
+  // Reasoning before the answer, as with the review's findings and verdict:
+  // the model commits to what the photos show before it picks a bucket.
+  category_reasoning: z
+    .string()
+    .describe(
+      "What the photographs show the item is, and why it belongs in this category and subcategory. Say so explicitly when that differs from the seller's choice.",
+    ),
+  category: z
+    .enum(Category)
+    .describe(
+      "The category the item actually belongs in. Keep the seller's choice unless the item plainly belongs elsewhere.",
+    ),
+  subcategory: z
+    .enum(Subcategory)
+    .nullable()
+    .describe(
+      'One of the subcategories under the chosen category. Null only if none fits.',
+    ),
   title: z
     .string()
     .describe('Only mention attributes that also appear in specifications.'),

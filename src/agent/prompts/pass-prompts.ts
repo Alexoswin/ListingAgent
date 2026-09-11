@@ -1,7 +1,15 @@
 import type { LlmMessage } from '../../llm/llm.types';
+import { CATEGORY_SUBCATEGORIES } from '../../listings/enums/category.enum';
 import { CONDITION_TIERS } from '../schemas';
 import { describeImages, imageParts, type RunContext } from '../types';
 import { getCategoryHints } from './category-spec-hints';
+
+/** The whole taxonomy, one category per line: the only buckets a draft may use. */
+const TAXONOMY = Object.entries(CATEGORY_SUBCATEGORIES)
+  .map(
+    ([category, subcategories]) => `- ${category}: ${subcategories.join(', ')}`,
+  )
+  .join('\n');
 
 /**
  * Both passes' prompts, kept together so the difference between them is
@@ -47,6 +55,14 @@ Then say what each one is, and where it ended up. Judging which is which is your
 
 Anything you mark as a defect must appear in the listing. Quietly dropping a disclosed flaw is the worst thing you can do here, and marking a real defect as anything other than "defect" to avoid publishing it is the same failure wearing a different label.
 
+## Category
+
+Sellers often file an item under the wrong category, or leave the subcategory blank. Set category and subcategory to what the item actually is, from this list only:
+
+${TAXONOMY}
+
+Keep the seller's choice when it fits. Move it only when the photographs plainly show something else — a sofa filed under electronics, headphones filed as a phone — and say what you saw in category_reasoning. The subcategory must come from the list under the category you chose. Fill it in when the seller left it blank, and leave it null only if none fits.
+
 ## Sequence
 
 1. analyze_images first, always.
@@ -79,6 +95,7 @@ A real defect graded "claim", "reassurance" or "not_a_disclosure" is how a flaw 
 - Whether the condition tier matches the wear actually visible.
 - Whether the title claims anything the specifications do not carry.
 - Whether original_mrp is a plausible new price, and above the asking price.
+- Whether category and subcategory fit the item in the photographs. The header says where the seller filed it; if the draft moved it, check that the move is right. A wrong category is a contradicted claim.
 
 Call check_draft to run the automated rules, and account for what it returns.
 
@@ -110,7 +127,7 @@ export function buildGenerateMessages(context: RunContext): LlmMessage[] {
             '',
             describeImages(context),
             '',
-            `Specs worth looking for in this category: ${hints.specKeys.join(', ')}.`,
+            `Specs worth looking for in the seller's category (if you move the listing, look for what fits the new one): ${hints.specKeys.join(', ')}.`,
             `Condition aspects to address: ${hints.conditionAspects.join('; ')}.`,
             '',
             'These are prompts for what to look for, not a list to fill in. Any you cannot source stays out.',
@@ -158,4 +175,4 @@ export function buildVerifyMessages(context: RunContext): LlmMessage[] {
 }
 
 const header = ({ listing }: RunContext) =>
-  `Listing ${listing.listing_id} — ${listing.category}${listing.subcategory ? ` / ${listing.subcategory}` : ''}`;
+  `Listing ${listing.listing_id} — the seller filed it under ${listing.category}${listing.subcategory ? ` / ${listing.subcategory}` : ' (no subcategory)'}`;

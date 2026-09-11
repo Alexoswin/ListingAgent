@@ -181,8 +181,9 @@ export class ListingsService {
           ...pdp.condition,
           unverifiable_claims: pdp.unverifiable_claims,
         },
-        category: dto.category,
-        ...(dto.subcategory && { subcategory: dto.subcategory }),
+        // The agent's category, which may correct the seller's.
+        category: pdp.category,
+        ...(pdp.subcategory && { subcategory: pdp.subcategory }),
         publish: result.publish,
       }).save();
       await this.saveImages(listingId, dto.imageUrls);
@@ -195,7 +196,7 @@ export class ListingsService {
     }
 
     this.logger.log(
-      `Generate ${id}: saved, ${result.publish ? 'published' : 'held for human review'}`,
+      `Generate ${id}: saved under ${pdp.category}${pdp.subcategory ? ` / ${pdp.subcategory}` : ''}, ${result.publish ? 'published' : 'held for human review'}`,
     );
     return { id, ...result };
   }

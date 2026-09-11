@@ -1,4 +1,5 @@
 import type { JsonValue } from '../common/types/json-value';
+import { CATEGORY_SUBCATEGORIES } from '../listings/enums/category.enum';
 import type { RunContext, Violation } from './types';
 import { usableImages } from './types';
 
@@ -16,6 +17,9 @@ const SPEC_TOKEN =
 const flat = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 const overlaps = (a: string, b: string) =>
   flat(a).includes(flat(b)) || flat(b).includes(flat(a));
+
+const categoryLabel = (category: string, subcategory?: string | null) =>
+  subcategory ? `${category} / ${subcategory}` : category;
 
 /**
  * Checks a draft against everything gathered for its listing.
@@ -215,6 +219,34 @@ export function checkDraft(context: RunContext): Violation[] {
       'tier_contradicts_seller_issues',
       'blocking',
       `Tier "${draft.condition.tier}" against disclosed defects: ${defects.map((d) => d.source_text).join('; ')}.`,
+    );
+  }
+
+  // Category ----------------------------------------------------------------
+  // Which category an item belongs in is the model's call. These only keep the
+  // answer inside the taxonomy and make a move visible, so a reclassification
+  // is never silent; the reviewing pass checks the move against the photos.
+  if (
+    draft.subcategory &&
+    !CATEGORY_SUBCATEGORIES[draft.category].includes(draft.subcategory)
+  ) {
+    add(
+      'subcategory_not_in_category',
+      'blocking',
+      `"${draft.subcategory}" is not a subcategory of ${draft.category}.`,
+    );
+  }
+  if (draft.category !== listing.category) {
+    add(
+      'category_corrected',
+      'warning',
+      `Seller filed this under ${categoryLabel(listing.category, listing.subcategory)}; the draft moves it to ${categoryLabel(draft.category, draft.subcategory)}.`,
+    );
+  } else if (listing.subcategory && draft.subcategory !== listing.subcategory) {
+    add(
+      'subcategory_corrected',
+      'warning',
+      `Seller chose ${listing.subcategory}; the draft uses ${draft.subcategory ?? 'no subcategory'}.`,
     );
   }
 
