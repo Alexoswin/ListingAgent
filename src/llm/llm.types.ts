@@ -46,3 +46,15 @@ export interface LlmObjectResponse<T> {
   object: T;
   usage: LlmUsage;
 }
+
+/** Input for `generateObjectWithWebSearch()`. */
+export interface LlmWebSearchRequest<T> extends LlmObjectRequest<T> {
+  /** ISO country code the search should favour, e.g. 'IN'. */
+  searchCountry?: string;
+}
+
+/** Result of `generateObjectWithWebSearch()`. */
+export interface LlmWebSearchResponse<T> extends LlmObjectResponse<T> {
+  /** Every URL the search returned. Empty means it found nothing to ground the answer on. */
+  sources: string[];
+}

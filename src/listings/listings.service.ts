@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -32,6 +33,8 @@ const LISTING_PROJECTION = {
 
 @Injectable()
 export class ListingsService {
+  private readonly logger = new Logger(ListingsService.name);
+
   constructor(
     @InjectModel(Listing.name)
     private readonly listings: Model<ListingDocument>,
@@ -128,8 +131,12 @@ export class ListingsService {
    */
   async generate(sellerId: string, dto: GenerateListingDto) {
     const listingId = new Types.ObjectId();
+    const id = listingId.toString();
+    this.logger.log(
+      `Generate ${id}: seller ${sellerId}, ${dto.category}, ${dto.imageUrls.length} image(s)`,
+    );
     const result = await this.agent.runListing({
-      listing_id: listingId.toString(),
+      listing_id: id,
       category: dto.category,
       subcategory: dto.subcategory,
       images: dto.imageUrls,
@@ -148,35 +155,49 @@ export class ListingsService {
 
     const pdp = result.generated_pdp;
     if (!pdp) {
+      this.logger.error(
+        `Generate ${id}: the agent produced no draft, nothing saved`,
+      );
       throw new ServiceUnavailableException(
         'The agent could not produce a listing from these photos. Try again, or create the listing manually.',
       );
     }
 
-    await new this.listings({
-      _id: listingId,
-      sellerId: new Types.ObjectId(sellerId),
-      title: pdp.title,
-      desc: pdp.description,
-      price: dto.price,
-      ...(pdp.original_mrp !== null && { originalPrice: pdp.original_mrp }),
-      ...(dto.brand && { brand: dto.brand }),
-      ...(dto.model && { model: dto.model }),
-      ...(dto.yearPurchased && { yearPurchased: dto.yearPurchased }),
-      specs: Object.fromEntries(
-        pdp.specifications.map((spec) => [spec.key, spec.value]),
-      ),
-      conditionDetails: {
-        ...pdp.condition,
-        unverifiable_claims: pdp.unverifiable_claims,
-      },
-      category: dto.category,
-      ...(dto.subcategory && { subcategory: dto.subcategory }),
-      publish: result.publish,
-    }).save();
+    try {
+      await new this.listings({
+        _id: listingId,
+        sellerId: new Types.ObjectId(sellerId),
+        title: pdp.title,
+        desc: pdp.description,
+        price: dto.price,
+        ...(pdp.original_mrp !== null && { originalPrice: pdp.original_mrp }),
+        ...(dto.brand && { brand: dto.brand }),
+        ...(dto.model && { model: dto.model }),
+        ...(dto.yearPurchased && { yearPurchased: dto.yearPurchased }),
+        specs: Object.fromEntries(
+          pdp.specifications.map((spec) => [spec.key, spec.value]),
+        ),
+        conditionDetails: {
+          ...pdp.condition,
+          unverifiable_claims: pdp.unverifiable_claims,
+        },
+        category: dto.category,
+        ...(dto.subcategory && { subcategory: dto.subcategory }),
+        publish: result.publish,
+      }).save();
+      await this.saveImages(listingId, dto.imageUrls);
+    } catch (error) {
+      this.logger.error(
+        `Generate ${id}: saving the listing failed: ${(error as Error).message}`,
+        (error as Error).stack,
+      );
+      throw error;
+    }
 
-    await this.saveImages(listingId, dto.imageUrls);
-    return { id: listingId.toString(), ...result };
+    this.logger.log(
+      `Generate ${id}: saved, ${result.publish ? 'published' : 'held for human review'}`,
+    );
+    return { id, ...result };
   }
 
   private saveImages(listing: Types.ObjectId, imageUrls?: string[]) {

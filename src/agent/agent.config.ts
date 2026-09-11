@@ -10,7 +10,6 @@ export interface AgentConfig {
   generate: string;
   /** Verification pass — a different model wherever possible. */
   verify: string;
-  search: { backend: 'tavily' | 'serper' | 'none'; apiKey: string | null };
   /**
    * True when the passes run on different models. When false they share one
    * model's blind spots, so a photo that misleads the first tends to mislead
@@ -49,22 +48,9 @@ export function resolveAgentConfig(config: ConfigService): AgentConfig {
     );
   }
 
-  const search = get('TAVILY_API_KEY')
-    ? { backend: 'tavily' as const, apiKey: get('TAVILY_API_KEY') as string }
-    : get('SERPER_API_KEY')
-      ? { backend: 'serper' as const, apiKey: get('SERPER_API_KEY') as string }
-      : { backend: 'none' as const, apiKey: null };
-
-  if (search.backend === 'none') {
-    logger.warn(
-      'No TAVILY_API_KEY or SERPER_API_KEY: product lookup falls back to model knowledge, and every MRP it returns is marked unverified.',
-    );
-  }
-
   return {
     generate,
     verify,
-    search,
     decorrelated,
     concurrency: Number(get('AGENT_CONCURRENCY') ?? 3),
   };

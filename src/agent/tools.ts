@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 import type { LlmService } from '../llm/llm.service';
+import type { LlmWebSearchResponse } from '../llm/llm.types';
 import type { AgentConfig } from './agent.config';
 import { checkDraft, hasBlocking, summarize } from './draft-checker';
 import {
@@ -9,9 +10,14 @@ import {
   pdpSchema,
   productLookupSchema,
   reviewSchema,
+  type ProductLookup,
 } from './schemas';
-import { imageParts, usableImages, type RunContext } from './types';
-import { webSearch } from './web-search';
+import {
+  imageParts,
+  usableImages,
+  type RunContext,
+  type Violation,
+} from './types';
 
 export interface ToolDeps {
   llm: LlmService;
@@ -31,6 +37,33 @@ const logger = new Logger('AgentTools');
 /** Tool arguments arrive as `unknown`; take a string or nothing. */
 const asText = (value: unknown) =>
   typeof value === 'string' ? value.trim() : '';
+
+/** Log prefix: which listing, which tool. */
+const tag = (context: RunContext, tool: string) =>
+  `${context.listing.listing_id} ${tool}`;
+
+/** Violation codes at one severity, for log lines. */
+const codesOf = (violations: Violation[], severity: Violation['severity']) =>
+  violations
+    .filter((violation) => violation.severity === severity)
+    .map((violation) => violation.code);
+
+/**
+ * Logs a failed model call, then rethrows it. The Agents SDK catches a tool's
+ * error and hands the model a generic message, so without this a failed vision
+ * or lookup call would leave no trace in the logs.
+ */
+async function logFailure<T>(step: string, pending: Promise<T>): Promise<T> {
+  try {
+    return await pending;
+  } catch (error) {
+    logger.error(
+      `${step}: failed: ${(error as Error).message}`,
+      (error as Error).stack,
+    );
+    throw error;
+  }
+}
 
 const ANALYZE_SYSTEM = `You are examining photographs of a second-hand item for a marketplace.
 
@@ -62,42 +95,53 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
     parameters: listingIdArg,
     async execute() {
       const { context, config, llm } = deps;
+      const step = tag(context, 'analyze_images');
       if (context.analysis) {
+        logger.log(`${step}: reused the cached analysis`);
         return JSON.stringify(context.analysis);
       }
-      if (usableImages(context).length === 0) {
+      const images = usableImages(context).length;
+      if (images === 0) {
+        logger.warn(`${step}: no usable image, nothing to analyse`);
         return 'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.';
       }
 
+      logger.log(`${step}: reading ${images} image(s)`);
       const { seller, category, subcategory } = context.listing;
-      const { object, usage } = await llm.generateObject({
-        model: config.generate, // default gpt-4.1-mini used
-        system: ANALYZE_SYSTEM,
-        schema: imageAnalysisSchema,
-        schemaName: 'image_analysis',
-        temperature: 0, //Verification tasks need consistency, not creativity. A low temperature reduces variation in wording and makes the model less likely to speculate about uncertain visual details.
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: [
-                  `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
-                  `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
-                  '',
-                  'Treat that as a claim to check, not a description to confirm. Report what you see.',
-                ].join('\n'),
-              },
-              ...imageParts(context),
-            ],
-          },
-        ],
-      });
+      const { object, usage } = await logFailure(
+        step,
+        llm.generateObject({
+          model: config.generate, // default gpt-4.1-mini used
+          system: ANALYZE_SYSTEM,
+          schema: imageAnalysisSchema,
+          schemaName: 'image_analysis',
+          temperature: 0, //Verification tasks need consistency, not creativity. A low temperature reduces variation in wording and makes the model less likely to speculate about uncertain visual details.
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: [
+                    `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
+                    `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
+                    '',
+                    'Treat that as a claim to check, not a description to confirm. Report what you see.',
+                  ].join('\n'),
+                },
+                ...imageParts(context),
+              ],
+            },
+          ],
+        }),
+      );
 
       context.usage.inputTokens += usage.inputTokens;
       context.usage.outputTokens += usage.outputTokens;
       context.analysis = object;
+      logger.log(
+        `${step}: done — brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
+      );
       return JSON.stringify(object);
     },
   });
@@ -107,8 +151,9 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
  *
  * MRP is the one required field no photograph can supply — the seller's
  * `original_price` is blank across the dataset — so this is the only route to
- * it. Without a search key it still answers from the model's own knowledge, but
- * marks the result so the draft has to label the price unverified.
+ * it. It searches with OpenAI's hosted web search. If the search fails or finds
+ * nothing, it answers from the model's own knowledge instead, and marks the
+ * result so the draft has to label the price unverified.
  */
 export const productLookupTool = (deps: ToolDeps) =>
   tool({
@@ -128,19 +173,13 @@ export const productLookupTool = (deps: ToolDeps) =>
       const model = asText(args.model);
       const category = asText(args.category);
 
+      const step = tag(context, 'product_lookup');
       if (!brand && !model) {
+        logger.warn(`${step}: no brand or model given, nothing to look up`);
         return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
       }
 
-      const results = await webSearch(
-        config.search,
-        `${brand} ${model} ${category} original launch price India specifications`.trim(),
-      );
-      const evidence = results.length
-        ? ('web' as const)
-        : ('model_knowledge' as const);
-
-      const { object, usage } = await llm.generateObject({
+      const request = (instruction: string) => ({
         model: config.generate,
         system: LOOKUP_SYSTEM,
         schema: productLookupSchema,
@@ -148,27 +187,11 @@ export const productLookupTool = (deps: ToolDeps) =>
         temperature: 0,
         messages: [
           {
-            role: 'user',
+            role: 'user' as const,
             content: [
               {
-                type: 'text',
-                text: [
-                  `Identify: ${brand} ${model} (${category})`,
-                  '',
-                  ...(results.length
-                    ? [
-                        'Search results:',
-                        ...results.map(
-                          (r, i) =>
-                            `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`,
-                        ),
-                        '',
-                        'Use these. Do not add specifications they do not support.',
-                      ]
-                    : [
-                        'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
-                      ]),
-                ].join('\n'),
+                type: 'text' as const,
+                text: `Identify: ${brand} ${model} (${category})\n\n${instruction}`,
               },
               // The photos help pin the variant when the model string is vague,
               // which is most of this dataset ("7420 7 series i7 11 generation").
@@ -178,13 +201,60 @@ export const productLookupTool = (deps: ToolDeps) =>
         ],
       });
 
+      logger.log(
+        `${step}: searching the web for "${[brand, model].filter(Boolean).join(' ')}"`,
+      );
+      let lookup: LlmWebSearchResponse<ProductLookup>;
+      try {
+        lookup = await llm.generateObjectWithWebSearch({
+          ...request(
+            'Search the web for its original launch price in India and its manufacturer specifications. Use only what the search results support; do not add specifications they do not mention.',
+          ),
+          searchCountry: 'IN',
+        });
+      } catch (error) {
+        logger.error(
+          `${step}: web search failed, falling back to model knowledge: ${(error as Error).message}`,
+          (error as Error).stack,
+        );
+        lookup = {
+          ...(await logFailure(
+            `${step} (fallback)`,
+            llm.generateObject(
+              request(
+                'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
+              ),
+            ),
+          )),
+          sources: [],
+        };
+      }
+
+      const { object, usage, sources } = lookup;
+      // A search that came back empty grounded nothing, whatever the answer says.
+      const evidence = sources.length
+        ? ('web' as const)
+        : ('model_knowledge' as const);
+
       context.usage.inputTokens += usage.inputTokens;
       context.usage.outputTokens += usage.outputTokens;
       context.lookups.push({ ...object, evidence });
 
+      const found = `${object.matched_product ?? 'no match'}, MRP ${object.original_mrp_inr ?? 'not found'}`;
+      if (evidence === 'web') {
+        logger.log(
+          `${step}: done — ${found}, from ${sources.length} web source(s)`,
+        );
+      } else {
+        logger.warn(
+          `${step}: done — ${found}, from model knowledge only (unverified)`,
+        );
+      }
+
       return JSON.stringify({
         ...object,
-        sources: results.map((result) => result.url),
+        // A search can return dozens of URLs; the draft only needs a few.
+        sources: sources.slice(0, 5),
         cite_as: evidence === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
       });
     },
@@ -209,29 +279,41 @@ export function submitDraftTool(deps: ToolDeps) {
     parameters: pdpSchema,
     execute(args) {
       const { context } = deps;
+      const step = tag(context, 'submit_draft');
       const parsed = pdpSchema.safeParse(args);
       if (!parsed.success) {
+        logger.warn(
+          `${step}: rejected, wrong shape (${parsed.error.issues.length} issue(s))`,
+        );
         return `Draft rejected — wrong shape:\n${issues(parsed.error)}`;
       }
 
       attempts++;
       context.draft = parsed.data;
       context.violations = checkDraft(context);
+      const blocking = codesOf(context.violations, 'blocking');
+      const warnings = codesOf(context.violations, 'warning');
 
       if (!hasBlocking(context.violations)) {
         context.finished = true;
+        logger.log(
+          `${step}: accepted on attempt ${attempts}${warnings.length ? `, warnings: ${warnings.join(', ')}` : ''}`,
+        );
         return `Draft accepted.\n${summarize(context.violations)}`;
       }
       if (attempts >= MAX_DRAFT_ATTEMPTS) {
         // Keep the draft and let verification see it with its violations
         // attached — an escalated listing beats a failed one.
-        logger.warn(
-          `Listing ${context.listing.listing_id}: still blocking after ${attempts} attempts, escalating`,
+        logger.error(
+          `${step}: still blocking after ${attempts} attempts (${blocking.join(', ')}), escalating`,
         );
         context.finished = true;
         return 'Draft kept with unresolved problems; it will be escalated.';
       }
 
+      logger.warn(
+        `${step}: attempt ${attempts} rejected — ${blocking.join(', ')}`,
+      );
       return [
         'Draft rejected. Fix every blocking problem and submit again.',
         '',
@@ -255,8 +337,13 @@ export const checkDraftTool = (deps: ToolDeps) =>
       'Run the automated rule checks over the draft you are reviewing: sourcing, price arithmetic, tier consistency, and dropped seller disclosures.',
     parameters: listingIdArg,
     execute() {
-      deps.context.violations = checkDraft(deps.context);
-      return summarize(deps.context.violations);
+      const { context } = deps;
+      context.violations = checkDraft(context);
+      const blocking = codesOf(context.violations, 'blocking');
+      logger.log(
+        `${tag(context, 'check_draft')}: ${blocking.length ? `blocking: ${blocking.join(', ')}` : 'no blocking violations'}; ${codesOf(context.violations, 'warning').length} warning(s)`,
+      );
+      return summarize(context.violations);
     },
   });
 
@@ -268,12 +355,20 @@ export const submitReviewTool = (deps: ToolDeps) =>
       'Submit your verification result: per-claim findings, any omissions, and the verdict.',
     parameters: reviewSchema,
     execute(args) {
+      const step = tag(deps.context, 'submit_review');
       const parsed = reviewSchema.safeParse(args);
       if (!parsed.success) {
+        logger.warn(
+          `${step}: rejected, wrong shape (${parsed.error.issues.length} issue(s))`,
+        );
         return `Review rejected — wrong shape:\n${issues(parsed.error)}`;
       }
+      const { verdict, findings, omissions } = parsed.data;
       deps.context.review = parsed.data;
       deps.context.finished = true;
+      logger.log(
+        `${step}: ${verdict} — ${findings.length} finding(s), ${findings.filter((finding) => finding.status === 'contradicted').length} contradicted, ${omissions.length} omission(s)`,
+      );
       return 'Review recorded.';
     },
   });

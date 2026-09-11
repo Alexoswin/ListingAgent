@@ -35,6 +35,9 @@ const logger = new Logger('AgentRunner');
 export async function runPass(options: PassOptions): Promise<boolean> {
   const { context, label } = options;
   context.finished = false;
+  const started = Date.now();
+  const elapsed = () => `${Date.now() - started}ms`;
+  logger.log(`${label}: started on ${options.model}`);
 
   const agent = new Agent<RunContext>({
     name: label,
@@ -73,21 +76,28 @@ export async function runPass(options: PassOptions): Promise<boolean> {
       // The model answered with prose instead of submitting. Every pass ends by
       // submitting, so there is nothing to collect — log what it said instead,
       // because that text is the only clue to why it stopped.
-      logger.warn(
-        `${label}: finished without calling a submit tool — said: ${String(
+      logger.error(
+        `${label}: stopped after ${elapsed()} without calling a submit tool — said: ${String(
           result.finalOutput ?? '',
         ).slice(0, 400)}`,
       );
+      return false;
     }
-    return context.finished;
+    logger.log(
+      `${label}: completed in ${elapsed()} (${wrapped.usage.inputTokens} in / ${wrapped.usage.outputTokens} out tokens)`,
+    );
+    return true;
   } catch (error) {
     if (error instanceof MaxTurnsExceededError) {
       // Usage still has to be reported: a pass that fails cost tokens too.
       context.usage.inputTokens += wrapped.usage.inputTokens;
       context.usage.outputTokens += wrapped.usage.outputTokens;
-      logger.warn(`${label}: hit the ${options.maxSteps}-turn limit`);
+      logger.error(
+        `${label}: hit the ${options.maxSteps}-turn limit after ${elapsed()} without submitting`,
+      );
       return false;
     }
+    // Logged by the caller, which knows which pass of which listing broke.
     throw error;
   }
 }

@@ -94,13 +94,21 @@ export class AgentService {
    * that shares none of the drafting context.
    */
   async runListing(listing: SellerListing): Promise<ListingResult> {
+    const id = listing.listing_id;
     const started = Date.now();
+    this.logger.log(
+      `Listing ${id}: started (${listing.category}${listing.subcategory ? ` / ${listing.subcategory}` : ''}, ${listing.images.length} image(s))`,
+    );
+
     const context = createRunContext(
       listing,
       await this.images.fetchAll(listing.images),
     );
+    this.logImages(context);
     const deps: ToolDeps = { llm: this.llm, config: this.config, context };
 
+    // Which pass was running, so a failure log says where it broke.
+    let stage = 'generate';
     try {
       await runPass({
         model: this.config.generate,
@@ -117,6 +125,7 @@ export class AgentService {
       });
 
       if (context.draft) {
+        stage = 'verify';
         await runPass({
           model: this.config.verify,
           system: VERIFY_SYSTEM,
@@ -130,18 +139,48 @@ export class AgentService {
           context,
           label: `verify:${listing.listing_id}`,
         });
+      } else {
+        this.logger.error(
+          `Listing ${id}: no draft produced, skipping verification`,
+        );
       }
     } catch (error) {
       this.logger.error(
-        `Listing ${listing.listing_id} failed: ${(error as Error).message}`,
+        `Listing ${id}: ${stage} pass failed: ${(error as Error).message}`,
+        (error as Error).stack,
       );
     }
 
     const result = this.assemble(context);
-    this.logger.log(
-      `Listing ${listing.listing_id}: ${result.review.verdict} in ${Date.now() - started}ms`,
-    );
+    const summary = `Listing ${id}: ${result.review.verdict} in ${Date.now() - started}ms (${context.usage.inputTokens} in / ${context.usage.outputTokens} out tokens)`;
+    if (result.publish) {
+      this.logger.log(summary);
+    } else {
+      // Escalating is the expected outcome for a doubtful listing, not a crash,
+      // so it is a warning; the reasons say whether anything actually broke.
+      this.logger.warn(
+        `${summary}: ${result.review.escalation_reasons.join(' ') || 'the reviewer asked for human review.'}`,
+      );
+    }
     return result;
+  }
+
+  /** One line for the image fetch, at a level that matches how it went. */
+  private logImages(context: RunContext) {
+    const id = context.listing.listing_id;
+    const submitted = context.images.length;
+    const loaded = usableImages(context).length;
+    if (loaded === submitted) {
+      this.logger.log(`Listing ${id}: ${loaded} image(s) loaded`);
+    } else if (loaded === 0) {
+      this.logger.error(
+        `Listing ${id}: none of ${submitted} image(s) loaded, nothing can be verified visually`,
+      );
+    } else {
+      this.logger.warn(
+        `Listing ${id}: ${loaded} of ${submitted} image(s) loaded`,
+      );
+    }
   }
 
   /**

@@ -9,11 +9,14 @@ import type {
   LlmObjectResponse,
   LlmRequest,
   LlmUsage,
+  LlmWebSearchRequest,
+  LlmWebSearchResponse,
 } from './llm.types';
 
 type ChatCompletion = OpenAI.Chat.Completions.ChatCompletion;
 type ChatParams =
   OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming;
+type Response = OpenAI.Responses.Response;
 
 const API_KEY_VAR = 'OPENAI_API_KEY';
 
@@ -61,6 +64,71 @@ export class LlmService {
       model: request.model,
       object: parseObject(request.schema, choice.message.content ?? ''),
       usage: usageOf(completion),
+    };
+  }
+
+  /**
+   * `generateObject()`, but the model searches the web before it answers.
+   *
+   * This one runs on the Responses API, because that is where OpenAI's hosted
+   * web search lives. `tool_choice: 'required'` forces at least one search, so
+   * the answer cannot quietly come from memory while looking researched.
+   */
+  async generateObjectWithWebSearch<T>(
+    request: LlmWebSearchRequest<T>,
+  ): Promise<LlmWebSearchResponse<T>> {
+    const response = await this.client().responses.create({
+      model: request.model,
+      instructions: request.system,
+      input: request.messages.map(toResponsesMessage),
+      tools: [
+        {
+          type: 'web_search',
+          ...(request.searchCountry && {
+            user_location: {
+              type: 'approximate',
+              country: request.searchCountry,
+            },
+          }),
+        },
+      ],
+      tool_choice: 'required',
+      // Without this the response lists only the URLs the model chose to cite.
+      include: ['web_search_call.action.sources'],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: request.schemaName,
+          schema: toJsonSchema(request.schema),
+          strict: true,
+        },
+      },
+      ...(request.temperature !== undefined && {
+        temperature: request.temperature,
+      }),
+      ...(request.maxOutputTokens !== undefined && {
+        max_output_tokens: request.maxOutputTokens,
+      }),
+    });
+    // Same failure modes as `generateObject()`: cut off, or declined.
+    if (response.status === 'incomplete') {
+      throw new Error(
+        `OpenAI response was incomplete: ${response.incomplete_details?.reason ?? 'unknown reason'}`,
+      );
+    }
+    const refusal = refusalOf(response);
+    if (refusal) {
+      throw new Error(`OpenAI refused the request: ${refusal}`);
+    }
+
+    return {
+      model: request.model,
+      object: parseObject(request.schema, response.output_text),
+      usage: {
+        inputTokens: response.usage?.input_tokens ?? 0,
+        outputTokens: response.usage?.output_tokens ?? 0,
+      },
+      sources: webSources(response),
     };
   }
 
@@ -136,4 +204,65 @@ function toOpenAiPart(
   return part.type === 'text'
     ? { type: 'text', text: part.text }
     : { type: 'image_url', image_url: { url: part.url } };
+}
+
+/** The Responses API's version of `toOpenAiMessage()`. */
+function toResponsesMessage(
+  message: LlmMessage,
+): OpenAI.Responses.EasyInputMessage {
+  return {
+    role: 'user',
+    content:
+      typeof message.content === 'string'
+        ? message.content
+        : message.content.map((part) =>
+            part.type === 'text'
+              ? { type: 'input_text' as const, text: part.text }
+              : {
+                  type: 'input_image' as const,
+                  image_url: part.url,
+                  detail: 'auto' as const,
+                },
+          ),
+  };
+}
+
+/** The refusal text, if the model declined instead of answering. */
+function refusalOf(response: Response): string | null {
+  for (const item of response.output) {
+    if (item.type !== 'message') {
+      continue;
+    }
+    for (const part of item.content) {
+      if (part.type === 'refusal') {
+        return part.refusal;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Every URL the search turned up, de-duplicated: the sources of each search
+ * call, plus any URL the answer cites.
+ */
+function webSources(response: Response): string[] {
+  const urls = response.output.flatMap((item): string[] => {
+    if (item.type === 'web_search_call') {
+      return item.action.type === 'search'
+        ? (item.action.sources ?? []).map((source) => source.url)
+        : [];
+    }
+    if (item.type === 'message') {
+      return item.content.flatMap((part) =>
+        part.type === 'output_text'
+          ? part.annotations.flatMap((annotation) =>
+              annotation.type === 'url_citation' ? [annotation.url] : [],
+            )
+          : [],
+      );
+    }
+    return [];
+  });
+  return [...new Set(urls)];
 }
