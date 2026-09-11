@@ -64,6 +64,12 @@ export interface RunContext {
   draft: GeneratedPdp | null;
   review: AgentReview | null;
   violations: Violation[];
+  /**
+   * Set by whichever tool ends a pass. The Agents SDK loop reads it once per
+   * turn to decide whether the pass is finished — a rejected draft leaves it
+   * false so the model gets another attempt.
+   */
+  finished: boolean;
   usage: { inputTokens: number; outputTokens: number };
 }
 
@@ -79,6 +85,7 @@ export function createRunContext(
     draft: null,
     review: null,
     violations: [],
+    finished: false,
     usage: { inputTokens: 0, outputTokens: 0 },
   };
 }

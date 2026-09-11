@@ -11,7 +11,7 @@ import {
   VERIFY_SYSTEM,
 } from './prompts/pass-prompts';
 import type { AgentReview, GeneratedPdp, Verdict } from './schemas';
-import { runPass } from './tool-loop';
+import { runPass } from './agent-runner';
 import {
   analyzeImagesTool,
   checkDraftTool,
@@ -102,22 +102,22 @@ export class AgentService {
     const deps: ToolDeps = { llm: this.llm, config: this.config, context };
 
     try {
-      await runPass(this.llm, {
+      await runPass({
         model: this.config.generate,
         system: GENERATE_SYSTEM,
         messages: buildGenerateMessages(context),
         tools: [
-          analyzeImagesTool(deps),
-          productLookupTool(deps),
+          analyzeImagesTool(deps), //Reads the listing's images
+          productLookupTool(deps), // Looks up a product's canonical specs and its original MRP
           submitDraftTool(deps),
         ],
         maxSteps: 8,
-        usage: context.usage,
+        context,
         label: `generate:${listing.listing_id}`,
       });
 
       if (context.draft) {
-        await runPass(this.llm, {
+        await runPass({
           model: this.config.verify,
           system: VERIFY_SYSTEM,
           messages: buildVerifyMessages(context),
@@ -127,7 +127,7 @@ export class AgentService {
             submitReviewTool(deps),
           ],
           maxSteps: 6,
-          usage: context.usage,
+          context,
           label: `verify:${listing.listing_id}`,
         });
       }

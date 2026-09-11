@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { tool } from '@openai/agents';
 import { z } from 'zod';
 import type { LlmService } from '../llm/llm.service';
 import type { AgentConfig } from './agent.config';
@@ -9,7 +10,6 @@ import {
   productLookupSchema,
   reviewSchema,
 } from './schemas';
-import type { AgentTool } from './tool-loop';
 import { imageParts, usableImages, type RunContext } from './types';
 import { webSearch } from './web-search';
 
@@ -54,58 +54,53 @@ If the model string covers several variants at different prices and you cannot t
  * its vision call on images that exist. The result is cached on the context:
  * the drafting model often asks twice, and the photos do not change.
  */
-export const analyzeImagesTool = (deps: ToolDeps): AgentTool => ({
-  spec: {
+export const analyzeImagesTool = (deps: ToolDeps) =>
+  tool({
     name: 'analyze_images',
     description:
       "Look at the listing's photographs and report what is visible: brand and model markings, readable specs, damage, accessories, and whether any image is a stock photo. Call this before drafting.",
     parameters: listingIdArg,
-  },
-  async execute() {
-    const { context, config, llm } = deps;
-    if (context.analysis) {
-      return { done: false, result: JSON.stringify(context.analysis) };
-    }
-    if (usableImages(context).length === 0) {
-      return {
-        done: false,
-        result:
-          'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.',
-      };
-    }
+    async execute() {
+      const { context, config, llm } = deps;
+      if (context.analysis) {
+        return JSON.stringify(context.analysis);
+      }
+      if (usableImages(context).length === 0) {
+        return 'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.';
+      }
 
-    const { seller, category, subcategory } = context.listing;
-    const { object, usage } = await llm.generateObject({
-      model: config.generate,
-      system: ANALYZE_SYSTEM,
-      schema: imageAnalysisSchema,
-      schemaName: 'image_analysis',
-      temperature: 0,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: [
-                `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
-                `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
-                '',
-                'Treat that as a claim to check, not a description to confirm. Report what you see.',
-              ].join('\n'),
-            },
-            ...imageParts(context),
-          ],
-        },
-      ],
-    });
+      const { seller, category, subcategory } = context.listing;
+      const { object, usage } = await llm.generateObject({
+        model: config.generate, // default gpt-4.1-mini used
+        system: ANALYZE_SYSTEM,
+        schema: imageAnalysisSchema,
+        schemaName: 'image_analysis',
+        temperature: 0, //Verification tasks need consistency, not creativity. A low temperature reduces variation in wording and makes the model less likely to speculate about uncertain visual details.
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: [
+                  `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
+                  `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
+                  '',
+                  'Treat that as a claim to check, not a description to confirm. Report what you see.',
+                ].join('\n'),
+              },
+              ...imageParts(context),
+            ],
+          },
+        ],
+      });
 
-    context.usage.inputTokens += usage.inputTokens;
-    context.usage.outputTokens += usage.outputTokens;
-    context.analysis = object;
-    return { done: false, result: JSON.stringify(object) };
-  },
-});
+      context.usage.inputTokens += usage.inputTokens;
+      context.usage.outputTokens += usage.outputTokens;
+      context.analysis = object;
+      return JSON.stringify(object);
+    },
+  });
 
 /**
  * Looks up a product's canonical specs and its original MRP.
@@ -115,8 +110,8 @@ export const analyzeImagesTool = (deps: ToolDeps): AgentTool => ({
  * it. Without a search key it still answers from the model's own knowledge, but
  * marks the result so the draft has to label the price unverified.
  */
-export const productLookupTool = (deps: ToolDeps): AgentTool => ({
-  spec: {
+export const productLookupTool = (deps: ToolDeps) =>
+  tool({
     name: 'product_lookup',
     description:
       "Find a product's original list price when new (MRP) and its manufacturer specifications. Use it for the MRP, and to corroborate specs you could not read off the photos.",
@@ -127,81 +122,73 @@ export const productLookupTool = (deps: ToolDeps): AgentTool => ({
         .string()
         .describe('What kind of product, e.g. "gaming laptop".'),
     }),
-  },
-  async execute(args) {
-    const { context, config, llm } = deps;
-    const brand = asText(args.brand);
-    const model = asText(args.model);
-    const category = asText(args.category);
+    async execute(args) {
+      const { context, config, llm } = deps;
+      const brand = asText(args.brand);
+      const model = asText(args.model);
+      const category = asText(args.category);
 
-    if (!brand && !model) {
-      return {
-        done: false,
-        result:
-          'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.',
-      };
-    }
+      if (!brand && !model) {
+        return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
+      }
 
-    const results = await webSearch(
-      config.search,
-      `${brand} ${model} ${category} original launch price India specifications`.trim(),
-    );
-    const evidence = results.length
-      ? ('web' as const)
-      : ('model_knowledge' as const);
+      const results = await webSearch(
+        config.search,
+        `${brand} ${model} ${category} original launch price India specifications`.trim(),
+      );
+      const evidence = results.length
+        ? ('web' as const)
+        : ('model_knowledge' as const);
 
-    const { object, usage } = await llm.generateObject({
-      model: config.generate,
-      system: LOOKUP_SYSTEM,
-      schema: productLookupSchema,
-      schemaName: 'product_lookup',
-      temperature: 0,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: [
-                `Identify: ${brand} ${model} (${category})`,
-                '',
-                ...(results.length
-                  ? [
-                      'Search results:',
-                      ...results.map(
-                        (r, i) =>
-                          `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`,
-                      ),
-                      '',
-                      'Use these. Do not add specifications they do not support.',
-                    ]
-                  : [
-                      'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
-                    ]),
-              ].join('\n'),
-            },
-            // The photos help pin the variant when the model string is vague,
-            // which is most of this dataset ("7420 7 series i7 11 generation").
-            ...imageParts(context),
-          ],
-        },
-      ],
-    });
+      const { object, usage } = await llm.generateObject({
+        model: config.generate,
+        system: LOOKUP_SYSTEM,
+        schema: productLookupSchema,
+        schemaName: 'product_lookup',
+        temperature: 0,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: [
+                  `Identify: ${brand} ${model} (${category})`,
+                  '',
+                  ...(results.length
+                    ? [
+                        'Search results:',
+                        ...results.map(
+                          (r, i) =>
+                            `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`,
+                        ),
+                        '',
+                        'Use these. Do not add specifications they do not support.',
+                      ]
+                    : [
+                        'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
+                      ]),
+                ].join('\n'),
+              },
+              // The photos help pin the variant when the model string is vague,
+              // which is most of this dataset ("7420 7 series i7 11 generation").
+              ...imageParts(context),
+            ],
+          },
+        ],
+      });
 
-    context.usage.inputTokens += usage.inputTokens;
-    context.usage.outputTokens += usage.outputTokens;
-    context.lookups.push({ ...object, evidence });
+      context.usage.inputTokens += usage.inputTokens;
+      context.usage.outputTokens += usage.outputTokens;
+      context.lookups.push({ ...object, evidence });
 
-    return {
-      done: false,
-      result: JSON.stringify({
+      return JSON.stringify({
         ...object,
         sources: results.map((result) => result.url),
         cite_as: evidence === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
-      }),
-    };
-  },
-});
+      });
+    },
+  });
 
 /**
  * The only exit from the generation pass, and where the rule checks run.
@@ -212,24 +199,19 @@ export const productLookupTool = (deps: ToolDeps): AgentTool => ({
  * writing the whole thing out twice. A rejected draft comes back as violations,
  * so the pass self-corrects before review ever sees it.
  */
-export function submitDraftTool(deps: ToolDeps): AgentTool {
+export function submitDraftTool(deps: ToolDeps) {
   let attempts = 0;
 
-  return {
-    spec: {
-      name: 'submit_draft',
-      description:
-        'Submit the finished listing. It is checked against the images and the seller submission before it is accepted; if it comes back with problems, fix them and submit again.',
-      parameters: pdpSchema,
-    },
+  return tool({
+    name: 'submit_draft',
+    description:
+      'Submit the finished listing. It is checked against the images and the seller submission before it is accepted; if it comes back with problems, fix them and submit again.',
+    parameters: pdpSchema,
     execute(args) {
       const { context } = deps;
       const parsed = pdpSchema.safeParse(args);
       if (!parsed.success) {
-        return {
-          done: false,
-          result: `Draft rejected — wrong shape:\n${issues(parsed.error)}`,
-        };
+        return `Draft rejected — wrong shape:\n${issues(parsed.error)}`;
       }
 
       attempts++;
@@ -237,10 +219,8 @@ export function submitDraftTool(deps: ToolDeps): AgentTool {
       context.violations = checkDraft(context);
 
       if (!hasBlocking(context.violations)) {
-        return {
-          done: true,
-          result: `Draft accepted.\n${summarize(context.violations)}`,
-        };
+        context.finished = true;
+        return `Draft accepted.\n${summarize(context.violations)}`;
       }
       if (attempts >= MAX_DRAFT_ATTEMPTS) {
         // Keep the draft and let verification see it with its violations
@@ -248,24 +228,19 @@ export function submitDraftTool(deps: ToolDeps): AgentTool {
         logger.warn(
           `Listing ${context.listing.listing_id}: still blocking after ${attempts} attempts, escalating`,
         );
-        return {
-          done: true,
-          result: 'Draft kept with unresolved problems; it will be escalated.',
-        };
+        context.finished = true;
+        return 'Draft kept with unresolved problems; it will be escalated.';
       }
 
-      return {
-        done: false,
-        result: [
-          'Draft rejected. Fix every blocking problem and submit again.',
-          '',
-          summarize(context.violations),
-          '',
-          'Dropping an unsupportable specification is a valid fix. So is lowering the condition tier, or leaving original_mrp null.',
-        ].join('\n'),
-      };
+      return [
+        'Draft rejected. Fix every blocking problem and submit again.',
+        '',
+        summarize(context.violations),
+        '',
+        'Dropping an unsupportable specification is a valid fix. So is lowering the condition tier, or leaving original_mrp null.',
+      ].join('\n');
     },
-  };
+  });
 }
 
 /**
@@ -273,39 +248,35 @@ export function submitDraftTool(deps: ToolDeps): AgentTool {
  * making the reviewer retype the object it is auditing invites exactly the
  * transcription drift an audit exists to catch.
  */
-export const checkDraftTool = (deps: ToolDeps): AgentTool => ({
-  spec: {
+export const checkDraftTool = (deps: ToolDeps) =>
+  tool({
     name: 'check_draft',
     description:
       'Run the automated rule checks over the draft you are reviewing: sourcing, price arithmetic, tier consistency, and dropped seller disclosures.',
     parameters: listingIdArg,
-  },
-  execute() {
-    deps.context.violations = checkDraft(deps.context);
-    return { done: false, result: summarize(deps.context.violations) };
-  },
-});
+    execute() {
+      deps.context.violations = checkDraft(deps.context);
+      return summarize(deps.context.violations);
+    },
+  });
 
 /** The verification pass's only exit. */
-export const submitReviewTool = (deps: ToolDeps): AgentTool => ({
-  spec: {
+export const submitReviewTool = (deps: ToolDeps) =>
+  tool({
     name: 'submit_review',
     description:
       'Submit your verification result: per-claim findings, any omissions, and the verdict.',
     parameters: reviewSchema,
-  },
-  execute(args) {
-    const parsed = reviewSchema.safeParse(args);
-    if (!parsed.success) {
-      return {
-        done: false,
-        result: `Review rejected — wrong shape:\n${issues(parsed.error)}`,
-      };
-    }
-    deps.context.review = parsed.data;
-    return { done: true, result: 'Review recorded.' };
-  },
-});
+    execute(args) {
+      const parsed = reviewSchema.safeParse(args);
+      if (!parsed.success) {
+        return `Review rejected — wrong shape:\n${issues(parsed.error)}`;
+      }
+      deps.context.review = parsed.data;
+      deps.context.finished = true;
+      return 'Review recorded.';
+    },
+  });
 
 const issues = (error: z.ZodError) =>
   error.issues

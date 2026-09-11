@@ -8,7 +8,6 @@ import type {
   LlmObjectRequest,
   LlmObjectResponse,
   LlmRequest,
-  LlmResponse,
   LlmUsage,
 } from './llm.types';
 
@@ -19,60 +18,18 @@ type ChatParams =
 const API_KEY_VAR = 'OPENAI_API_KEY';
 
 /**
- * The class the rest of the app uses to call an LLM. Each call names its model,
- * e.g. `llm.generate({ model: 'gpt-4.1-mini', messages })`.
+ * One-shot structured generation: give it a zod schema, get back a validated
+ * object of that shape.
  *
- * Backed by OpenAI's Chat Completions API: this translates the app's neutral
- * message/tool shapes to OpenAI's format and back.
+ * The agent loop does not come through here — that runs on the Agents SDK in
+ * `agent-runner`. This covers the calls that are a single question with a known
+ * answer shape, where a loop would be overhead.
  */
 @Injectable()
 export class LlmService {
   private cached: OpenAI | null = null;
 
   constructor(private readonly config: ConfigService) {}
-
-  /** Returns the model's text and/or the tool calls it wants to make. */
-  async generate(request: LlmRequest): Promise<LlmResponse> {
-    const completion = await this.client().chat.completions.create({
-      ...baseParams(request),
-      // Only send `tools` when there are some; OpenAI rejects an empty list.
-      ...(request.tools?.length
-        ? {
-            tools: request.tools.map((tool) => ({
-              type: 'function' as const,
-              function: {
-                name: tool.name,
-                description: tool.description,
-                parameters: toJsonSchema(tool.parameters),
-              },
-            })),
-          }
-        : {}),
-    });
-    const { message } = firstChoice(completion);
-
-    return {
-      model: request.model,
-      text: message.content ?? '',
-      // Keep only function calls (the only tool type we declare) and parse
-      // their arguments, which OpenAI returns as a JSON string.
-      toolCalls: (message.tool_calls ?? []).flatMap((call) =>
-        call.type === 'function'
-          ? [
-              {
-                id: call.id,
-                name: call.function.name,
-                args: JSON.parse(call.function.arguments) as Record<
-                  string,
-                  unknown
-                >,
-              },
-            ]
-          : [],
-      ),
-      usage: usageOf(completion),
-    };
-  }
 
   /** Returns an object validated against `request.schema`. */
   async generateObject<T>(
@@ -159,47 +116,17 @@ function usageOf(completion: ChatCompletion): LlmUsage {
   };
 }
 
-/** Converts one of our messages to OpenAI's message format. */
+/** Converts one of our prompt turns to OpenAI's message format. */
 function toOpenAiMessage(
   message: LlmMessage,
 ): OpenAI.Chat.Completions.ChatCompletionMessageParam {
-  switch (message.role) {
-    case 'user':
-      return {
-        role: 'user',
-        content:
-          typeof message.content === 'string'
-            ? message.content
-            : message.content.map(toOpenAiPart),
-      };
-    case 'assistant':
-      // Replays the model's earlier turn, including its tool calls, so OpenAI
-      // can match them with the tool results that follow.
-      return {
-        role: 'assistant',
-        content: message.content ?? null,
-        ...(message.toolCalls?.length
-          ? {
-              tool_calls: message.toolCalls.map((call) => ({
-                id: call.id,
-                type: 'function' as const,
-                function: {
-                  name: call.name,
-                  // OpenAI expects the arguments back as a JSON string.
-                  arguments: JSON.stringify(call.args),
-                },
-              })),
-            }
-          : {}),
-      };
-    case 'tool':
-      // `tool_call_id` tells OpenAI which call this result answers.
-      return {
-        role: 'tool',
-        tool_call_id: message.toolCallId,
-        content: message.content,
-      };
-  }
+  return {
+    role: 'user',
+    content:
+      typeof message.content === 'string'
+        ? message.content
+        : message.content.map(toOpenAiPart),
+  };
 }
 
 /** Converts a text/image part. OpenAI downloads image URLs itself, so the URL is passed through. */
