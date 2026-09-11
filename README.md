@@ -23,6 +23,10 @@ npm run test:e2e       # e2e tests
 npm run lint            # eslint
 ```
 
+## Logs
+
+Every agent step logs its success or failure, and every line carries the listing id, so one `grep` follows a listing through both passes. Warnings mean the cautious path was taken (a rejected draft, an unverified MRP, an escalation); errors mean something broke. See [Docs/agent-architecture.md](../Docs/agent-architecture.md) §9 for the full list.
+
 ## Environment Variables
 
 | Variable | Description |
