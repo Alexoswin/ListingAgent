@@ -54,7 +54,7 @@ async function main() {
   const agent = app.get(AgentService);
 
   logger.log(
-    `${listings.length} listing(s) · ${agent.config.generate.model} → ${agent.config.verify.model} · search: ${agent.config.search.backend}`,
+    `${listings.length} listing(s) · ${agent.config.generate} → ${agent.config.verify} · search: ${agent.config.search.backend}`,
   );
 
   const results = await agent.run(listings);

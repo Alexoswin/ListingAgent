@@ -6,10 +6,9 @@ import { z } from 'zod';
  * Field names are snake_case because these objects are written straight to
  * `output/results.json` — they are a wire format, like a DTO.
  *
- * Two constraints shape what can appear here, both from OpenAI's strict
- * structured-output mode: it supports only a subset of JSON Schema, so
- * constraint keywords (`.min()`, `.max()`, `.default()`) are out; and every
- * declared key must be present, so optional fields use `.nullable()`.
+ * One constraint shapes what can appear here, from OpenAI's strict
+ * structured-output mode: every declared key must be present, so optional
+ * fields use `.nullable()` rather than `.optional()`.
  */
 
 export const SPEC_SOURCES = ['image', 'lookup', 'seller'] as const;

@@ -1,10 +1,7 @@
 import type { z } from 'zod';
 
-// Provider-neutral types for the LLM wrapper. Callers only use these shapes;
-// each provider translates them to and from its own SDK's format.
-
-/** Which backend handles a call. */
-export type LlmProviderName = 'openai' | 'gemini';
+// Types for the LLM wrapper. Callers use these shapes; `LlmService` translates
+// them to and from the OpenAI SDK's format.
 
 /** One piece of a user message: text, or an image given as an http(s) or data: URL. */
 export type LlmContentPart =
@@ -18,8 +15,6 @@ export interface LlmToolCall {
   name: string;
   /** The arguments the model chose, already parsed from JSON. */
   args: Record<string, unknown>;
-  // Gemini rejects follow-up turns whose function calls lack their original signature.
-  thoughtSignature?: string;
 }
 
 /**
@@ -42,9 +37,7 @@ export interface LlmTool {
 
 /** Input for `generate()`. */
 export interface LlmRequest {
-  /** Which backend to use for this call. */
-  provider: LlmProviderName;
-  /** Model name for that backend, e.g. 'gpt-4.1-mini' or 'gemini-2.5-flash'. */
+  /** Which OpenAI model to use, e.g. 'gpt-4.1-mini'. */
   model: string;
   /** Optional system prompt: instructions that frame the whole conversation. */
   system?: string;
@@ -77,7 +70,6 @@ export interface LlmUsage {
 
 /** Result of `generate()`: the model's text and/or the tools it wants to call. */
 export interface LlmResponse {
-  provider: LlmProviderName;
   model: string;
   /** The model's text answer; empty when it only made tool calls. */
   text: string;
@@ -88,17 +80,7 @@ export interface LlmResponse {
 
 /** Result of `generateObject()`: the parsed, schema-validated object. */
 export interface LlmObjectResponse<T> {
-  provider: LlmProviderName;
   model: string;
   object: T;
   usage: LlmUsage;
-}
-
-/** What each provider implementation (OpenAI, Gemini) must offer. */
-export interface LlmProvider {
-  readonly name: LlmProviderName;
-  generate(request: LlmRequest): Promise<LlmResponse>;
-  generateObject<T>(
-    request: LlmObjectRequest<T>,
-  ): Promise<LlmObjectResponse<T>>;
 }

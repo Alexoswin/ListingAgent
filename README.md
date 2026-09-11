@@ -27,9 +27,10 @@ npm run lint            # eslint
 
 | Variable | Description |
 |---|---|
-| `OPENAI_API_KEY` | LLM provider key used for generation/verification |
-| `MODEL` | Model name to use (e.g. `gpt-4-turbo`) |
-| `SEARCH_API_KEY` | Optional key for product-lookup/web search tool |
+| `OPENAI_API_KEY` | OpenAI key used for both the drafting and verification passes |
+| `AGENT_GENERATE_MODEL` | Model for the drafting pass (default `gpt-4.1-mini`) |
+| `AGENT_VERIFY_MODEL` | Model for the verification pass (default `gpt-4.1`) |
+| `TAVILY_API_KEY` / `SERPER_API_KEY` | Optional key for the product-lookup web search |
 | `MONGO_URI` | MongoDB connection string |
 | `PORT` | Server port (default `3000`) |
 

@@ -1,7 +1,6 @@
 import { Logger } from '@nestjs/common';
 import type { LlmService } from '../llm/llm.service';
 import type { LlmMessage, LlmTool } from '../llm/llm.types';
-import type { ModelChoice } from './agent.config';
 
 /**
  * What running a tool produced. `done: true` ends the loop — the tools that
@@ -19,7 +18,8 @@ export interface AgentTool {
 }
 
 export interface PassOptions {
-  model: ModelChoice;
+  /** Which OpenAI model runs this pass. */
+  model: string;
   system: string;
   messages: LlmMessage[];
   tools: AgentTool[];
@@ -49,8 +49,7 @@ export async function runPass(
 
   for (let step = 0; step < options.maxSteps; step++) {
     const response = await llm.generate({
-      provider: model.provider,
-      model: model.model,
+      model,
       system: options.system,
       messages,
       tools: tools.map((tool) => tool.spec),
@@ -73,8 +72,8 @@ export async function runPass(
     let done = false;
     for (const call of response.toolCalls) {
       const tool = byName.get(call.name);
-      // Every call in the turn is answered even after one finishes: providers
-      // reject a follow-up whose tool calls are missing their results.
+      // Every call in the turn is answered even after one finishes: OpenAI
+      // rejects a follow-up whose tool calls are missing their results.
       const outcome = tool
         ? await run(tool, call.args, label)
         : { done: false, result: `Unknown tool "${call.name}".` };

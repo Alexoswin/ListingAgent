@@ -76,7 +76,7 @@ export const analyzeImagesTool = (deps: ToolDeps): AgentTool => ({
 
     const { seller, category, subcategory } = context.listing;
     const { object, usage } = await llm.generateObject({
-      ...config.generate,
+      model: config.generate,
       system: ANALYZE_SYSTEM,
       schema: imageAnalysisSchema,
       schemaName: 'image_analysis',
@@ -151,7 +151,7 @@ export const productLookupTool = (deps: ToolDeps): AgentTool => ({
       : ('model_knowledge' as const);
 
     const { object, usage } = await llm.generateObject({
-      ...config.generate,
+      model: config.generate,
       system: LOOKUP_SYSTEM,
       schema: productLookupSchema,
       schemaName: 'product_lookup',

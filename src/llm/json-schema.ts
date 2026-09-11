@@ -1,12 +1,12 @@
 import { z } from 'zod';
 
 /**
- * Converts a zod schema to plain JSON Schema, the format both OpenAI and Gemini
- * expect for tool arguments and structured output.
+ * Converts a zod schema to plain JSON Schema, the format OpenAI expects for
+ * tool arguments and structured output.
  */
 export function toJsonSchema(schema: z.ZodType): Record<string, unknown> {
   const jsonSchema = z.toJSONSchema(schema) as Record<string, unknown>;
-  // zod adds a "$schema" version marker that the providers don't need.
+  // zod adds a "$schema" version marker that OpenAI doesn't need.
   delete jsonSchema.$schema;
   return jsonSchema;
 }

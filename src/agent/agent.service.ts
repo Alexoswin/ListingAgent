@@ -194,7 +194,7 @@ export class AgentService {
       diagnostics: {
         images_submitted: context.images.length,
         images_loaded: usableImages(context).length,
-        models: `${this.config.generate.model} → ${this.config.verify.model}`,
+        models: `${this.config.generate} → ${this.config.verify}`,
         decorrelated: this.config.decorrelated,
         usage: context.usage,
       },
