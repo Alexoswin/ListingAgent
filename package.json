@@ -5,6 +5,9 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
@@ -25,10 +28,10 @@
     "@aws-sdk/client-sesv2": "^3.1129.0",
     "@aws-sdk/s3-request-presigner": "^3.1129.0",
     "@nestjs/common": "^11.0.1",
-    "@nestjs/config": "^12.0.0",
+    "@nestjs/config": "4.0.2",
     "@nestjs/core": "^11.0.1",
-    "@nestjs/jwt": "^12.0.1",
-    "@nestjs/mongoose": "^12.0.0",
+    "@nestjs/jwt": "11.0.2",
+    "@nestjs/mongoose": "11.0.4",
     "@nestjs/platform-express": "^11.0.1",
     "@openai/agents": "^0.18.0",
     "bcryptjs": "^3.0.3",
