@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { AgentModule } from '../agent/agent.module';
+import { AgentLogsModule } from '../agent-logs/agent-logs.module';
 import { AuthModule } from '../auth/auth.module';
 import { ImagesModule } from '../images/images.module';
 import { Listing, ListingSchema } from './schemas/listing.schema';
@@ -13,6 +14,7 @@ import { ListingsService } from './listings.service';
     ImagesModule,
     AuthModule,
     AgentModule,
+    AgentLogsModule,
   ],
   controllers: [ListingsController],
   providers: [ListingsService],

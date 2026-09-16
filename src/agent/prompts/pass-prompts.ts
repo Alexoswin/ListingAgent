@@ -1,5 +1,6 @@
 import type { LlmMessage } from '../../llm/llm.types';
 import { CATEGORY_SUBCATEGORIES } from '../../listings/enums/category.enum';
+import { summarize } from '../draft-checker';
 import { CONDITION_TIERS } from '../schemas';
 import { describeImages, imageParts, type RunContext } from '../types';
 import { getCategoryHints } from './category-spec-hints';
@@ -78,7 +79,7 @@ You have the seller's original submission, the drafted listing, and the item's p
 Each names its own source. Check it on its own terms:
 
 - "image" with an image_index — open that photograph and read the value yourself. Confirm it only if you can see it. If the label is blurred, cropped, or angled away, that is "unverifiable", not "confirmed". If the photograph says something else, that is "contradicted".
-- "lookup" — does it match the product the photographs actually show?
+- "lookup" — does it match the product the photographs actually show? The lookup results are in your brief; check the matched product against what you see, not against the draft.
 - "seller" — nothing corroborates this by definition. Mark it "unverifiable" unless a photograph happens to confirm it.
 
 Do not reason from what the product usually ships with. A 512GB variant being the common one is not evidence that this unit is one. If your only ground for a value is that it sounds right, the status is "unverifiable".
@@ -97,7 +98,7 @@ A real defect graded "claim", "reassurance" or "not_a_disclosure" is how a flaw 
 - Whether original_mrp is a plausible new price, and above the asking price.
 - Whether category and subcategory fit the item in the photographs. The header says where the seller filed it; if the draft moved it, check that the move is right. A wrong category is a contradicted claim.
 
-Call check_draft to run the automated rules, and account for what it returns.
+The automated rule checks have already been run over this draft; their results are in your brief. Account for every one of them.
 
 ## Verdict
 
@@ -106,7 +107,7 @@ Call check_draft to run the automated rules, and account for what it returns.
 
 Escalating a sound listing costs someone two minutes; publishing a wrong one costs a buyer money. When genuinely torn, escalate — but do not escalate to avoid deciding: a listing whose claims you checked and confirmed should go live.
 
-Record your findings, then submit_review.`;
+Everything you need is in front of you. Record your findings and call submit_review.`;
 
 /** Pass A's opening turn: the submission, what loaded, and the category's vocabulary. */
 export function buildGenerateMessages(context: RunContext): LlmMessage[] {
@@ -147,6 +148,11 @@ export function buildGenerateMessages(context: RunContext): LlmMessage[] {
  * value tends to agree with it, and comparing a draft against a description of
  * the images only re-confirms whatever the first pass thought it saw.
  * Re-attaching the pixels is what makes disagreement possible.
+ *
+ * The rule-check results and lookup results ride along too. Neither breaks that
+ * separation: the rules are deterministic code, and a lookup result is what a
+ * web search returned, not what the drafting model concluded from it. The
+ * draft already cites the MRP; this just lets the reviewer see what it rests on.
  */
 export function buildVerifyMessages(context: RunContext): LlmMessage[] {
   return [
@@ -164,6 +170,11 @@ export function buildVerifyMessages(context: RunContext): LlmMessage[] {
             'Draft listing to check:',
             JSON.stringify(context.draft, null, 2),
             '',
+            'Automated rule checks, already run over this draft:',
+            summarize(context.violations),
+            '',
+            describeLookups(context),
+            '',
             describeImages(context),
             'The photographs follow.',
           ].join('\n'),
@@ -172,6 +183,20 @@ export function buildVerifyMessages(context: RunContext): LlmMessage[] {
       ],
     },
   ];
+}
+
+/** What product_lookup returned, for the reviewer to weigh the MRP against. */
+function describeLookups(context: RunContext): string {
+  if (context.lookups.length === 0) {
+    return 'Product lookup: none was run, so nothing corroborates an MRP.';
+  }
+  return [
+    'Product lookup results (what the search returned):',
+    ...context.lookups.map(
+      (lookup) =>
+        `- ${lookup.matched_product ?? 'no match'}: MRP ${lookup.original_mrp_inr ?? 'not found'} INR, ${lookup.evidence === 'web' ? 'from web search' : 'from model knowledge only, unverified'}. ${lookup.notes}`,
+    ),
+  ].join('\n');
 }
 
 const header = ({ listing }: RunContext) =>

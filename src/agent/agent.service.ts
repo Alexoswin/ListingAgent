@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LlmService } from '../llm/llm.service';
 import { resolveAgentConfig, type AgentConfig } from './agent.config';
-import { hasBlocking } from './draft-checker';
+import { checkDraft, hasBlocking } from './draft-checker';
 import { ImageFetcher } from './image-fetcher';
+import { ProductLookupCache } from './product-lookup-cache';
 import {
   buildGenerateMessages,
   buildVerifyMessages,
@@ -14,7 +15,6 @@ import type { AgentReview, GeneratedPdp, Verdict } from './schemas';
 import { runPass } from './agent-runner';
 import {
   analyzeImagesTool,
-  checkDraftTool,
   productLookupTool,
   submitDraftTool,
   submitReviewTool,
@@ -48,6 +48,7 @@ export interface ListingResult {
     models: string;
     decorrelated: boolean;
     usage: { inputTokens: number; outputTokens: number };
+    stages: RunContext['stats'];
   };
 }
 
@@ -60,7 +61,12 @@ export class AgentService {
     private readonly llm: LlmService,
     private readonly images: ImageFetcher,
     private readonly configService: ConfigService,
-  ) {}
+    private readonly lookupCache: ProductLookupCache,
+  ) {
+    this.logger.log(
+      `Product lookup cache: ${lookupCache.persistent ? 'persistent (Mongo)' : 'in memory only'}`,
+    );
+  }
 
   /**
    * Resolved on first use, not in the constructor: the HTTP app imports this
@@ -92,6 +98,12 @@ export class AgentService {
   /**
    * One listing: fetch the images once, draft, then verify the draft in a pass
    * that shares none of the drafting context.
+   *
+   * The verify pass gets no tools but its exit. It used to call `check_draft`
+   * and `product_lookup` itself — but its opening turn carries the photographs,
+   * and the agent loop re-sends that whole turn on every tool call, so each
+   * call re-bought every image on the most expensive model. Both answers are
+   * now worked out before the pass starts and handed to it in its brief.
    */
   async runListing(listing: SellerListing): Promise<ListingResult> {
     const id = listing.listing_id;
@@ -105,7 +117,12 @@ export class AgentService {
       await this.images.fetchAll(listing.images),
     );
     this.logImages(context);
-    const deps: ToolDeps = { llm: this.llm, config: this.config, context };
+    const deps: ToolDeps = {
+      llm: this.llm,
+      config: this.config,
+      context,
+      lookupCache: this.lookupCache,
+    };
 
     // Which pass was running, so a failure log says where it broke.
     let stage = 'generate';
@@ -122,22 +139,24 @@ export class AgentService {
         maxSteps: 8,
         context,
         label: `generate:${listing.listing_id}`,
+        stage: 'generation',
       });
 
       if (context.draft) {
         stage = 'verify';
+        // Pure code, no model: run it here so the verify pass reads the result
+        // instead of spending a turn — and a re-send of every photo — asking.
+        context.violations = checkDraft(context);
         await runPass({
           model: this.config.verify,
           system: VERIFY_SYSTEM,
           messages: buildVerifyMessages(context),
-          tools: [
-            checkDraftTool(deps),
-            productLookupTool(deps),
-            submitReviewTool(deps),
-          ],
-          maxSteps: 6,
+          tools: [submitReviewTool(deps)],
+          // One turn to submit, with room to resubmit a malformed review.
+          maxSteps: 3,
           context,
           label: `verify:${listing.listing_id}`,
+          stage: 'validation',
         });
       } else {
         this.logger.error(
@@ -236,6 +255,7 @@ export class AgentService {
         models: `${this.config.generate} → ${this.config.verify}`,
         decorrelated: this.config.decorrelated,
         usage: context.usage,
+        stages: context.stats,
       },
     };
   }

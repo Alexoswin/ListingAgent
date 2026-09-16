@@ -5,6 +5,7 @@ import type { LlmService } from '../llm/llm.service';
 import type { LlmWebSearchResponse } from '../llm/llm.types';
 import type { AgentConfig } from './agent.config';
 import { checkDraft, hasBlocking, summarize } from './draft-checker';
+import { lookupKey, type ProductLookupCache } from './product-lookup-cache';
 import {
   imageAnalysisSchema,
   pdpSchema,
@@ -14,6 +15,7 @@ import {
 } from './schemas';
 import {
   imageParts,
+  recordToolCall,
   usableImages,
   type RunContext,
   type Violation,
@@ -23,6 +25,7 @@ export interface ToolDeps {
   llm: LlmService;
   config: AgentConfig;
   context: RunContext;
+  lookupCache: ProductLookupCache;
 }
 
 /** After this many rejected drafts, keep what there is and let review sort it out. */
@@ -81,6 +84,47 @@ Return the price the product sold for NEW at launch, in INR, for the Indian mark
 If the model string covers several variants at different prices and you cannot tell which this is, return null for the price and explain the ambiguity. Null is the correct answer whenever the evidence does not single out one variant.`;
 
 /**
+ * What `analyze_images` read off the photographs, as text for the lookup.
+ *
+ * Only legible observations: an illegible one is exactly the detail the
+ * analysis refused to vouch for, and handing it to a search as if it were a
+ * fact would launder a guess into a lookup result.
+ */
+function visualEvidence(context: RunContext): string {
+  const analysis = context.analysis;
+  if (!analysis) {
+    return '';
+  }
+  const legible = analysis.observations.filter(
+    (observation) => observation.legible,
+  );
+  return [
+    analysis.observed_brand &&
+      `Brand visible on the item: ${analysis.observed_brand}`,
+    analysis.observed_model_text &&
+      `Model text visible on the item: ${analysis.observed_model_text}`,
+    legible.length > 0 &&
+      `Readable details: ${legible.map((observation) => `${observation.attribute}: ${observation.value}`).join('; ')}`,
+    analysis.visible_accessories.length > 0 &&
+      `Accessories in frame: ${analysis.visible_accessories.join(', ')}`,
+  ]
+    .filter((line): line is string => typeof line === 'string')
+    .join('\n');
+}
+
+/**
+ * Whether the lookup needs the photographs themselves.
+ *
+ * Normally it does not: the analysis already turned the pixels into a brand and
+ * model, which is what a search can use. The photos earn their tokens only when
+ * the analysis could read neither off the item, and a second look is the only
+ * way left to tell variants apart.
+ */
+const needsPhotos = (context: RunContext) =>
+  !context.analysis ||
+  (!context.analysis.observed_brand && !context.analysis.observed_model_text);
+
+/**
  * Reads the listing's images.
  *
  * The URLs were fetched and validated before the agent started, so this spends
@@ -95,6 +139,7 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
     parameters: listingIdArg,
     async execute() {
       const { context, config, llm } = deps;
+      recordToolCall(context, 'analyze_images');
       const step = tag(context, 'analyze_images');
       if (context.analysis) {
         logger.log(`${step}: reused the cached analysis`);
@@ -154,6 +199,11 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
  * it. It searches with OpenAI's hosted web search. If the search fails or finds
  * nothing, it answers from the model's own knowledge instead, and marks the
  * result so the draft has to label the price unverified.
+ *
+ * Web search is the most expensive call in a run, and marketplace inventory
+ * repeats — so a product already looked up is served from the cache with no
+ * model call at all. The search itself gets the image analysis as text rather
+ * than the photographs; see `needsPhotos` for when it gets the pixels too.
  */
 export const productLookupTool = (deps: ToolDeps) =>
   tool({
@@ -168,7 +218,8 @@ export const productLookupTool = (deps: ToolDeps) =>
         .describe('What kind of product, e.g. "gaming laptop".'),
     }),
     async execute(args) {
-      const { context, config, llm } = deps;
+      const { context, config, llm, lookupCache } = deps;
+      recordToolCall(context, 'product_lookup');
       const brand = asText(args.brand);
       const model = asText(args.model);
       const category = asText(args.category);
@@ -178,6 +229,24 @@ export const productLookupTool = (deps: ToolDeps) =>
         logger.warn(`${step}: no brand or model given, nothing to look up`);
         return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
       }
+
+      const product = [brand, model].filter(Boolean).join(' ');
+      const key = lookupKey(brand, model, category);
+      const cached = await lookupCache.get(key);
+      if (cached) {
+        context.lookups.push({ ...cached.lookup, evidence: cached.evidence });
+        logger.log(
+          `${step}: reused a cached lookup for "${product}" — ${cached.lookup.matched_product ?? 'no match'}, MRP ${cached.lookup.original_mrp_inr ?? 'not found'} (no model call)`,
+        );
+        return JSON.stringify({
+          ...cached.lookup,
+          sources: cached.sources,
+          cite_as: 'lookup_web',
+        });
+      }
+
+      const evidence = visualEvidence(context);
+      const attachPhotos = needsPhotos(context);
 
       const request = (instruction: string) => ({
         model: config.generate,
@@ -191,18 +260,26 @@ export const productLookupTool = (deps: ToolDeps) =>
             content: [
               {
                 type: 'text' as const,
-                text: `Identify: ${brand} ${model} (${category})\n\n${instruction}`,
+                text: [
+                  `Identify: ${brand} ${model} (${category})`,
+                  evidence &&
+                    `\nWhat the photographs were read to show:\n${evidence}`,
+                  `\n${instruction}`,
+                ]
+                  .filter(Boolean)
+                  .join('\n'),
               },
               // The photos help pin the variant when the model string is vague,
-              // which is most of this dataset ("7420 7 series i7 11 generation").
-              ...imageParts(context),
+              // which is most of this dataset ("7420 7 series i7 11 generation")
+              // — but only when the analysis could not read one off the item.
+              ...(attachPhotos ? imageParts(context) : []),
             ],
           },
         ],
       });
 
       logger.log(
-        `${step}: searching the web for "${[brand, model].filter(Boolean).join(' ')}"`,
+        `${step}: searching the web for "${product}" (${attachPhotos ? 'with photos, nothing legible to go on' : 'from the image analysis, no photos'})`,
       );
       let lookup: LlmWebSearchResponse<ProductLookup>;
       try {
@@ -232,16 +309,23 @@ export const productLookupTool = (deps: ToolDeps) =>
 
       const { object, usage, sources } = lookup;
       // A search that came back empty grounded nothing, whatever the answer says.
-      const evidence = sources.length
+      const grounding = sources.length
         ? ('web' as const)
         : ('model_knowledge' as const);
 
       context.usage.inputTokens += usage.inputTokens;
       context.usage.outputTokens += usage.outputTokens;
-      context.lookups.push({ ...object, evidence });
+      context.lookups.push({ ...object, evidence: grounding });
+      // A search can return dozens of URLs; the draft only needs a few.
+      const cited = sources.slice(0, 5);
+      await lookupCache.set(key, {
+        lookup: object,
+        evidence: grounding,
+        sources: cited,
+      });
 
       const found = `${object.matched_product ?? 'no match'}, MRP ${object.original_mrp_inr ?? 'not found'}`;
-      if (evidence === 'web') {
+      if (grounding === 'web') {
         logger.log(
           `${step}: done — ${found}, from ${sources.length} web source(s)`,
         );
@@ -253,9 +337,8 @@ export const productLookupTool = (deps: ToolDeps) =>
 
       return JSON.stringify({
         ...object,
-        // A search can return dozens of URLs; the draft only needs a few.
-        sources: sources.slice(0, 5),
-        cite_as: evidence === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
+        sources: cited,
+        cite_as: grounding === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
       });
     },
   });
@@ -279,6 +362,7 @@ export function submitDraftTool(deps: ToolDeps) {
     parameters: pdpSchema,
     execute(args) {
       const { context } = deps;
+      recordToolCall(context, 'submit_draft');
       const step = tag(context, 'submit_draft');
       const parsed = pdpSchema.safeParse(args);
       if (!parsed.success) {
@@ -289,6 +373,7 @@ export function submitDraftTool(deps: ToolDeps) {
       }
 
       attempts++;
+      context.stats.draftAttempts = attempts;
       context.draft = parsed.data;
       context.violations = checkDraft(context);
       const blocking = codesOf(context.violations, 'blocking');
@@ -325,28 +410,6 @@ export function submitDraftTool(deps: ToolDeps) {
   });
 }
 
-/**
- * Runs the rule checks over the draft under review. Takes an id, not the draft:
- * making the reviewer retype the object it is auditing invites exactly the
- * transcription drift an audit exists to catch.
- */
-export const checkDraftTool = (deps: ToolDeps) =>
-  tool({
-    name: 'check_draft',
-    description:
-      'Run the automated rule checks over the draft you are reviewing: sourcing, price arithmetic, tier consistency, and dropped seller disclosures.',
-    parameters: listingIdArg,
-    execute() {
-      const { context } = deps;
-      context.violations = checkDraft(context);
-      const blocking = codesOf(context.violations, 'blocking');
-      logger.log(
-        `${tag(context, 'check_draft')}: ${blocking.length ? `blocking: ${blocking.join(', ')}` : 'no blocking violations'}; ${codesOf(context.violations, 'warning').length} warning(s)`,
-      );
-      return summarize(context.violations);
-    },
-  });
-
 /** The verification pass's only exit. */
 export const submitReviewTool = (deps: ToolDeps) =>
   tool({
@@ -355,6 +418,7 @@ export const submitReviewTool = (deps: ToolDeps) =>
       'Submit your verification result: per-claim findings, any omissions, and the verdict.',
     parameters: reviewSchema,
     execute(args) {
+      recordToolCall(deps.context, 'submit_review');
       const step = tag(deps.context, 'submit_review');
       const parsed = reviewSchema.safeParse(args);
       if (!parsed.success) {

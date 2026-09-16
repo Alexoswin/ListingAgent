@@ -48,6 +48,55 @@ export interface ProductLookupResult extends ProductLookup {
   evidence: 'web' | 'model_knowledge';
 }
 
+export const AGENT_TOOL_NAMES = [
+  'analyze_images',
+  'product_lookup',
+  'submit_draft',
+  'submit_review',
+] as const;
+
+export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
+export type AgentStage = 'generation' | 'validation';
+
+export interface AgentStageStats {
+  model: string | null;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  completed: boolean;
+  toolCalls: Record<AgentToolName, number>;
+}
+
+export interface AgentRunStats {
+  generation: AgentStageStats;
+  validation: AgentStageStats;
+  draftAttempts: number;
+}
+
+const createStageStats = (): AgentStageStats => ({
+  model: null,
+  durationMs: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  completed: false,
+  toolCalls: Object.fromEntries(
+    AGENT_TOOL_NAMES.map((name) => [name, 0]),
+  ) as Record<AgentToolName, number>,
+});
+
+export const createAgentRunStats = (): AgentRunStats => ({
+  generation: createStageStats(),
+  validation: createStageStats(),
+  draftAttempts: 0,
+});
+
+export const recordToolCall = (context: RunContext, tool: AgentToolName) => {
+  const stage = context.activeStage;
+  if (stage) {
+    context.stats[stage].toolCalls[tool] += 1;
+  }
+};
+
 /**
  * Per-listing state for one run, shared by the tools.
  *
@@ -71,6 +120,8 @@ export interface RunContext {
    */
   finished: boolean;
   usage: { inputTokens: number; outputTokens: number };
+  activeStage: AgentStage | null;
+  stats: AgentRunStats;
 }
 
 export function createRunContext(
@@ -87,6 +138,8 @@ export function createRunContext(
     violations: [],
     finished: false,
     usage: { inputTokens: 0, outputTokens: 0 },
+    activeStage: null,
+    stats: createAgentRunStats(),
   };
 }
 

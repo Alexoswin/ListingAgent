@@ -7,6 +7,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AgentService } from '../agent/agent.service';
+import { AgentLogsService } from '../agent-logs/agent-logs.service';
 import type { JsonRecord } from '../common/types/json-value';
 import { Image, ImageDocument } from '../images/schemas/image.schema';
 import { CreateListingDto } from './dto/create-listing.dto';
@@ -41,6 +42,7 @@ export class ListingsService {
     @InjectModel(Image.name)
     private readonly images: Model<ImageDocument>,
     private readonly agent: AgentService,
+    private readonly agentLogs: AgentLogsService,
   ) {}
 
   async findAll(page: number, limit: number, category?: Category) {
@@ -135,26 +137,39 @@ export class ListingsService {
     this.logger.log(
       `Generate ${id}: seller ${sellerId}, ${dto.category}, ${dto.imageUrls.length} image(s)`,
     );
-    const result = await this.agent.runListing({
-      listing_id: id,
-      category: dto.category,
-      subcategory: dto.subcategory,
-      images: dto.imageUrls,
-      seller: {
-        title: dto.title,
-        description: dto.desc ?? '',
-        price: dto.price,
-        original_price: dto.originalPrice ?? null,
-        brand: dto.brand ?? null,
-        model: dto.model ?? null,
-        year_purchased: dto.yearPurchased ?? null,
-        specs: (dto.specs ?? {}) as JsonRecord,
-        condition_details: (dto.conditionDetails ?? {}) as JsonRecord,
-      },
-    });
+    const log = await this.agentLogs.start(sellerId, listingId, dto.imageUrls.length);
+    let result;
+    try {
+      result = await this.agent.runListing({
+        listing_id: id,
+        category: dto.category,
+        subcategory: dto.subcategory,
+        images: dto.imageUrls,
+        seller: {
+          title: dto.title,
+          description: dto.desc ?? '',
+          price: dto.price,
+          original_price: dto.originalPrice ?? null,
+          brand: dto.brand ?? null,
+          model: dto.model ?? null,
+          year_purchased: dto.yearPurchased ?? null,
+          specs: (dto.specs ?? {}) as JsonRecord,
+          condition_details: (dto.conditionDetails ?? {}) as JsonRecord,
+        },
+      });
+    } catch (error) {
+      await this.agentLogs.fail(log._id, 'generation', error);
+      throw error;
+    }
 
     const pdp = result.generated_pdp;
     if (!pdp) {
+      await this.agentLogs.complete(log._id, result, false);
+      await this.agentLogs.fail(
+        log._id,
+        'generation',
+        new Error('The agent produced no draft'),
+      );
       this.logger.error(
         `Generate ${id}: the agent produced no draft, nothing saved`,
       );
@@ -187,7 +202,10 @@ export class ListingsService {
         publish: result.publish,
       }).save();
       await this.saveImages(listingId, dto.imageUrls);
+      await this.agentLogs.complete(log._id, result, true);
     } catch (error) {
+      await this.agentLogs.complete(log._id, result, false);
+      await this.agentLogs.fail(log._id, 'persistence', error);
       this.logger.error(
         `Generate ${id}: saving the listing failed: ${(error as Error).message}`,
         (error as Error).stack,

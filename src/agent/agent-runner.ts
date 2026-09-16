@@ -8,7 +8,7 @@ import {
   type FunctionTool,
 } from '@openai/agents';
 import type { LlmMessage } from '../llm/llm.types';
-import type { RunContext } from './types';
+import type { AgentStage, RunContext } from './types';
 
 export interface PassOptions {
   /** Which OpenAI model runs this pass. */
@@ -21,6 +21,7 @@ export interface PassOptions {
   /** The per-listing state the tools read and write. */
   context: RunContext;
   label: string;
+  stage: AgentStage;
 }
 
 const logger = new Logger('AgentRunner');
@@ -33,8 +34,10 @@ const logger = new Logger('AgentRunner');
  * answer.
  */
 export async function runPass(options: PassOptions): Promise<boolean> {
-  const { context, label } = options;
+  const { context, label, stage } = options;
   context.finished = false;
+  context.activeStage = stage;
+  context.stats[stage].model = options.model;
   const started = Date.now();
   const elapsed = () => `${Date.now() - started}ms`;
   logger.log(`${label}: started on ${options.model}`);
@@ -71,6 +74,8 @@ export async function runPass(options: PassOptions): Promise<boolean> {
     });
     context.usage.inputTokens += wrapped.usage.inputTokens;
     context.usage.outputTokens += wrapped.usage.outputTokens;
+    context.stats[stage].inputTokens += wrapped.usage.inputTokens;
+    context.stats[stage].outputTokens += wrapped.usage.outputTokens;
 
     if (!context.finished) {
       // The model answered with prose instead of submitting. Every pass ends by
@@ -92,6 +97,8 @@ export async function runPass(options: PassOptions): Promise<boolean> {
       // Usage still has to be reported: a pass that fails cost tokens too.
       context.usage.inputTokens += wrapped.usage.inputTokens;
       context.usage.outputTokens += wrapped.usage.outputTokens;
+      context.stats[stage].inputTokens += wrapped.usage.inputTokens;
+      context.stats[stage].outputTokens += wrapped.usage.outputTokens;
       logger.error(
         `${label}: hit the ${options.maxSteps}-turn limit after ${elapsed()} without submitting`,
       );
@@ -99,6 +106,10 @@ export async function runPass(options: PassOptions): Promise<boolean> {
     }
     // Logged by the caller, which knows which pass of which listing broke.
     throw error;
+  } finally {
+    context.stats[stage].durationMs = Date.now() - started;
+    context.stats[stage].completed = context.finished;
+    context.activeStage = null;
   }
 }
 

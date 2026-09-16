@@ -16,7 +16,7 @@ describe('AppController', () => {
 
   describe('root', () => {
     it('should return "Listing Agent"', () => {
-      expect(appController.getHello()).toBe('Listng Agent!');
+      expect(appController.getHello()).toBe('Listing Agent!');
     });
   });
 });

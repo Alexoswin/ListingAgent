@@ -68,7 +68,7 @@ Then edit `.env`:
 | `AGENT_GENERATE_MODEL` | CLI, server | `gpt-4.1-mini` | Drafting pass, plus the `analyze_images` and `product_lookup` calls. Must accept images and support OpenAI's hosted `web_search` tool. |
 | `AGENT_VERIFY_MODEL` | CLI, server | `gpt-4.1` | Verification pass. Must accept images. A warning is logged at startup if it is the same as the drafting model. |
 | `AGENT_CONCURRENCY` | CLI, server | `3` | How many listings the CLI processes at once. |
-| `MONGO_URI` | server | `mongodb://127.0.0.1:27017/listing-agent` | MongoDB connection string. |
+| `MONGO_URI` | server | `mongodb://127.0.0.1:27017/listing-agent` | MongoDB connection string. Also backs the product lookup cache. |
 | `PORT` | server | `3000` | HTTP port. `.env.example` sets `6001`, which is what the frontend's `.env.example` points at. |
 | `FRONTEND_URL` | server | `http://localhost:3000` | Allowed CORS origin (credentials enabled). |
 | `JWT_SECRET` | server | `development-only-secret` | Signs the session JWT. Set a real secret outside local development. |
@@ -162,9 +162,10 @@ flowchart TD
     IN["Seller listing<br/>(CLI: data/listings.json · HTTP: POST /listings/generate)"] --> FETCH
     FETCH["1. Fetch images<br/>download + validate every URL once"] --> A
     A["2. Pass A — Generate<br/>AGENT_GENERATE_MODEL · up to 8 turns<br/>tools: analyze_images, product_lookup, submit_draft"]
-    A -->|draft accepted, or kept after 3 rejections| B
+    A -->|draft accepted, or kept after 3 rejections| CHECK
     A -->|no draft| GATE
-    B["3. Pass B — Verify<br/>AGENT_VERIFY_MODEL · up to 6 turns<br/>sees seller data + draft + photos only<br/>tools: check_draft, product_lookup, submit_review"]
+    CHECK["Rule checks re-run in code<br/>checkDraft(), no model"] --> B
+    B["3. Pass B — Verify<br/>AGENT_VERIFY_MODEL · up to 3 turns<br/>sees seller data + draft + photos,<br/>plus rule-check and lookup results<br/>tool: submit_review"]
     B --> GATE
     GATE["4. Verdict gate (plain code, no model)<br/>can only tighten the reviewer's verdict"]
     GATE --> OUT["ListingResult<br/>generated_pdp · review · publish · diagnostics"]
@@ -199,7 +200,15 @@ A pass ends only when a tool marks it finished. If the model runs out of turns, 
 
 ### 3. Pass B — Verify
 
-If a draft exists, a second agent reviews it, on a different model by default. Its first message holds the seller's original submission, the draft, and the photographs themselves. It does **not** see Pass A's tool results or reasoning.
+If a draft exists, `runListing()` first re-runs the [rule checks](#rule-checks) on it in plain code. Then a second agent reviews it, on a different model by default. Its first message holds:
+
+- the seller's original submission;
+- the draft;
+- the rule-check results;
+- what `product_lookup` returned in Pass A: the matched product, MRP, and whether it came from the web or model knowledge;
+- the photographs themselves.
+
+It does **not** see Pass A's reasoning, or what `analyze_images` concluded about the photos. The rule checks are deterministic code, and the lookup results are what a search returned rather than what the drafting model made of them, so neither undoes that separation.
 
 The reviewer checks each claim on its own terms:
 
@@ -207,9 +216,11 @@ The reviewer checks each claim on its own terms:
 - A `lookup` spec is checked against the product the photos show.
 - A `seller` spec is `unverifiable` unless a photo happens to confirm it.
 
-It also checks that the seller's disclosures were graded honestly (a real defect graded as a mere "claim" counts as an omission), and whether the tier, title, MRP and category fit the evidence. It can call `check_draft` to re-run the rule checks and `product_lookup` to independently check a spec or price.
+It also checks that the seller's disclosures were graded honestly (a real defect graded as a mere "claim" counts as an omission), and whether the tier, title, MRP and category fit the evidence.
 
-It finishes with `submit_review`: per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
+`submit_review` is its only tool, so it normally finishes in a single turn. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
+
+The reviewer does not run its own web search. Its MRP check rests on Pass A's lookup, backed by the `mrp_not_above_price` and `mrp_from_model_knowledge` rules.
 
 ### 4. Verdict gate
 
@@ -231,20 +242,37 @@ The reviewer can escalate a listing but cannot publish one on its own authority.
 - If either pass throws (for example, an OpenAI API error), the error is logged with the pass name and stack trace, and the listing still goes through the verdict gate with whatever it has. It comes out as `human_review_needed`, so no listing is dropped.
 - A tool error inside a pass (for example, a failed vision call) is logged by the tool and handed back to the model as text. It costs a turn, not the run.
 - If the web search in `product_lookup` fails, the tool falls back to one model-knowledge call and tags the result as unverified. The draft then has to cite the MRP as `lookup_model_knowledge`, which raises a warning.
+- If the lookup cache's database can't be read or written, the failure is logged as a warning and the lookup runs a normal search.
 
 ### Cost per listing
 
-A listing makes up to 8 Pass A turns, one vision call, one web-search call per `product_lookup`, and up to 6 Pass B turns. Every call's token usage, including calls made inside tools, is added up in `diagnostics.usage`.
+A listing makes up to 8 Pass A turns, one vision call, at most one web-search call per distinct `product_lookup`, and usually a single Pass B turn (3 at most). Every call's token usage, including calls made inside tools, is added up in `diagnostics.usage`. Per-pass figures are in `diagnostics.stages`.
+
+Images are the largest input cost, so the agent is careful about where they go:
+
+| Call | Photos attached? |
+|---|---|
+| Pass A turns | No. Pass A sees the photos only through `analyze_images`. |
+| `analyze_images` | Yes, at full detail, since reading spec labels is the point. Runs once per listing and is cached after that. |
+| `product_lookup` | Only when `analyze_images` could read neither a brand nor model text off the item. Otherwise it gets the analysis as text. |
+| Pass B | Yes, once, in its first message. |
+
+Pass B has no tools besides `submit_review` because the Agents SDK re-sends the whole conversation, photos included, on every turn. Each tool call would have paid for every photo again, on the more expensive model.
+
+**Lookup cache.** `product_lookup` results are cached by brand, model and category. The key ignores case, punctuation and spacing, so `ASUS TUF-Gaming F15` and `asus tuf gaming f15` share an entry. A repeat product costs no model call and no search.
+
+- The HTTP server stores entries in MongoDB for 30 days.
+- The CLI keeps them in memory for the run.
+- Only web-grounded answers are cached. A model-knowledge fallback means the search failed, so the next listing of that product tries again.
 
 ## Tools
 
 | Tool | Pass | Arguments | What it does | Model call inside? |
 |---|---|---|---|---|
 | `analyze_images` | A | `listing_id` | Sends every usable photo to the drafting model (temperature 0) and returns structured observations: per-image notes (shows the product? stock/catalogue render?), brand and model text visible on the item, readable specs each marked `legible: true/false`, visible damage, and visible accessories. The result is cached for the listing, so a second call is free. If no image loaded, it says so and makes no call. | Yes — vision |
-| `product_lookup` | A and B | `brand`, `model`, `category` | Finds the product's original launch price in INR and its manufacturer specs using OpenAI's hosted web search on the Responses API. At least one search is forced, results are biased to India, and the photos are attached to help pin the variant. If the search throws, it answers from model knowledge instead. The result is marked `lookup_web` only if the search returned at least one URL, otherwise `lookup_model_knowledge`. Returns up to 5 source URLs. | Yes — web search |
+| `product_lookup` | A | `brand`, `model`, `category` | Finds the product's original launch price in INR and its manufacturer specs. Checks the [lookup cache](#cost-per-listing) first and returns a cached answer without any model call. Otherwise it uses OpenAI's hosted web search on the Responses API. At least one search is forced, and results are biased to India. The search gets what `analyze_images` read legibly (brand, model text, readable details, accessories) as text. The photos are attached only when nothing identifying was legible. If the search throws, it answers from model knowledge instead. The result is marked `lookup_web` only if the search returned at least one URL, otherwise `lookup_model_knowledge`. Returns up to 5 source URLs. | Yes — web search, unless cached |
 | `submit_draft` | A | the full draft (`pdpSchema`) | Validates the shape, runs the rule checks, then accepts, rejects (with the violation list), or keeps-and-escalates after 3 attempts. The only way Pass A ends. | No |
-| `check_draft` | B | `listing_id` | Re-runs the rule checks on the draft under review and returns the summary. Takes an id rather than the draft, so the reviewer never retypes it. | No |
-| `submit_review` | B | the full review (`reviewSchema`) | Validates the shape and records the review. The only way Pass B ends. | No |
+| `submit_review` | B | the full review (`reviewSchema`) | Validates the shape and records the review. Pass B's only tool, and the only way it ends. | No |
 
 Tools don't pass data to each other through the model. They read and write a shared per-listing `RunContext`: images, image analysis, lookups, draft, review, violations, token usage.
 
@@ -367,7 +395,11 @@ Illustrative example (trimmed; not copied from a real run):
 ### `publish` and `diagnostics`
 
 - `publish` is `true` only when the verdict is `auto_publish`. The HTTP flow stores it as `Listing.publish`.
-- `diagnostics` records the images submitted and loaded, the two models used (`generate → verify`), whether they differ (`decorrelated`), and the total input/output tokens for the listing.
+- `diagnostics` records:
+  - the images submitted and loaded;
+  - the two models used (`generate → verify`), and whether they differ (`decorrelated`);
+  - the total input/output tokens for the listing;
+  - `stages`: per pass (`generation` / `validation`), the model, duration, tokens, whether it completed, and a call count for each tool. Also holds the number of draft attempts.
 
 ## Categories and condition tiers
 
@@ -398,6 +430,8 @@ Request bodies are validated with `class-validator`. Unknown fields are rejected
 | `POST` | `/listings` | ✓ | Creates a listing manually, without the agent. |
 | `GET` | `/listings` | | Paginated listings with a cover image. Query: `page` (default 1), `limit` (default 6, max 50), `category`. |
 | `GET` | `/listings/:id` | | One listing with all of its image URLs in upload order. |
+| `GET` | `/agent-logs` | | Paginated agent runs from `POST /listings/generate`, newest first. Query: `from`, `to` (`YYYY-MM-DD`, default the last 30 days), `page` (default 1), `limit` (default 25, max 100). |
+| `GET` | `/agent-logs/analytics` | | Totals for the same date range: a run summary (completed, failed, published, held, tokens, average duration), daily runs and tokens, tokens per stage and model, and tool calls per stage. The frontend dashboard reads this. |
 
 ### `POST /listings/generate`
 
@@ -437,6 +471,10 @@ MongoDB collections (Mongoose schemas, all with `createdAt` / `updatedAt`):
 | `listings` | [`listing.schema.ts`](src/listings/schemas/listing.schema.ts) | Seller, title, description, price, original price, brand, model, year, free-form `specs` and `conditionDetails`, category, subcategory, `publish`. |
 | `images` | [`image.schema.ts`](src/images/schemas/image.schema.ts) | Listing reference, `s3Url`, `sequenceNo` (unique per listing), `humanVerification` / `aiVerification` flags. |
 | `reviews` | [`review.schema.ts`](src/reviews/schemas/review.schema.ts) | Listing, reviewer, verdict, notes. The schema is defined, but no endpoint writes to it yet. |
+| `agentrunlogs` | [`agent-run-log.schema.ts`](src/agent-logs/schemas/agent-run-log.schema.ts) | One document per `POST /listings/generate` run. Holds the listing, seller, start/end time, duration, and status (`running` / `completed` / `failed`). Also the verdict, whether the listing was saved, images submitted and loaded, per-stage `stats`, token and tool-call totals, finding/omission/violation counts, and the failing stage and error message. |
+| `product_lookup_cache` | [`product-lookup-cache-entry.schema.ts`](src/product-lookups/schemas/product-lookup-cache-entry.schema.ts) | Cached `product_lookup` results: the normalised key, the lookup, its evidence, up to 5 source URLs, and `expiresAt`. A TTL index removes entries once they expire, 30 days after they were written. |
+
+Tool-call counts in `agentrunlogs` are keyed by tool name, with every current tool present even at zero. Runs from before Pass B lost its tools also have a `check_draft` key, and can have non-zero `check_draft` and `product_lookup` counts under `validation`. Newer runs have no `check_draft` key, and every validation count except `submit_review` is zero.
 
 ## Logging
 
@@ -444,9 +482,10 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 
 | Logger | Logs |
 |---|---|
-| `AgentService` | Listing started, images loaded, final verdict with time and tokens; escalation reasons; pass failures with stack traces. |
+| `AgentService` | At startup, whether the lookup cache is persistent (MongoDB) or in memory only. Per listing: started, images loaded, final verdict with time and tokens; escalation reasons; pass failures with stack traces. |
 | `AgentRunner` | Each pass's start (with model) and finish (with time and tokens); turn-limit and no-submit failures. |
-| `AgentTools` | What each tool did: what the vision call saw, lookup query and result, draft accepted or rejected (with violation codes), review verdict and counts. |
+| `AgentTools` | What each tool did: what the vision call saw; the lookup query, whether photos were attached, and the result, or a cache hit with no model call; draft accepted or rejected (with violation codes); review verdict and counts. |
+| `ProductLookupCache` | Warnings when the cache's database can't be read or written. |
 | `ImageFetcher` | Each unusable image and why. |
 | `ListingsService` | HTTP generate requests, and whether the listing was saved as published or held. |
 | `RunAgent` (CLI) | Listing count and models at start; publish/escalate totals and token usage at the end. |
@@ -457,9 +496,10 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 .
 ├── src/
 │   ├── agent/                      # the agent — no database dependency
-│   │   ├── agent.service.ts        # runListing(): fetch images → Pass A → Pass B → verdict gate; run(): concurrency pool
+│   │   ├── agent.service.ts        # runListing(): fetch images → Pass A → rule checks → Pass B → verdict gate; run(): concurrency pool
 │   │   ├── agent-runner.ts         # runPass(): one Agents SDK run with the "a tool must finish it" exit rule
-│   │   ├── tools.ts                # analyze_images, product_lookup, submit_draft, check_draft, submit_review
+│   │   ├── tools.ts                # analyze_images, product_lookup, submit_draft, submit_review
+│   │   ├── product-lookup-cache.ts # lookup cache: in memory, plus an optional persistent store
 │   │   ├── draft-checker.ts        # checkDraft(): the rule checks
 │   │   ├── schemas.ts              # Zod schemas: image analysis, lookup, draft (pdpSchema), review
 │   │   ├── types.ts                # SellerListing, RunContext, Violation, image-part helpers
@@ -474,6 +514,8 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 │   │   ├── json-schema.ts          # Zod → strict JSON Schema, and parsing the reply back
 │   │   └── llm.types.ts
 │   ├── listings/                   # listing controller, service (incl. the agent-backed generate flow), DTOs, schema, category enum
+│   ├── agent-logs/                 # one log per generate run; GET /agent-logs and /agent-logs/analytics
+│   ├── product-lookups/            # MongoDB store for the lookup cache (global module; the HTTP app loads it, the CLI doesn't)
 │   ├── auth/                       # signup / OTP / login / logout, JWT cookie guard
 │   ├── uploads/                    # presigned S3 upload URLs
 │   ├── users/  images/  reviews/   # Mongoose schemas and modules
