@@ -16,6 +16,7 @@ import {
 import {
   imageParts,
   recordToolCall,
+  recordUsage,
   usableImages,
   type RunContext,
   type Violation,
@@ -181,8 +182,7 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
         }),
       );
 
-      context.usage.inputTokens += usage.inputTokens;
-      context.usage.outputTokens += usage.outputTokens;
+      recordUsage(context, usage);
       context.analysis = object;
       logger.log(
         `${step}: done — brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
@@ -313,8 +313,7 @@ export const productLookupTool = (deps: ToolDeps) =>
         ? ('web' as const)
         : ('model_knowledge' as const);
 
-      context.usage.inputTokens += usage.inputTokens;
-      context.usage.outputTokens += usage.outputTokens;
+      recordUsage(context, usage);
       context.lookups.push({ ...object, evidence: grounding });
       // A search can return dozens of URLs; the draft only needs a few.
       const cited = sources.slice(0, 5);

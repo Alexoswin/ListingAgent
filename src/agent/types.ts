@@ -98,6 +98,28 @@ export const recordToolCall = (context: RunContext, tool: AgentToolName) => {
 };
 
 /**
+ * Counts a model call a tool made against the run and against the pass that
+ * made it.
+ *
+ * The Agents SDK only sees the pass's own turns, so a tool's vision or search
+ * call is invisible to it. Without this, those tokens reach the run's total but
+ * no pass — and the image analysis, the most expensive call on the cheaper
+ * model, disappears from any per-stage breakdown.
+ */
+export const recordUsage = (
+  context: RunContext,
+  usage: { inputTokens: number; outputTokens: number },
+) => {
+  context.usage.inputTokens += usage.inputTokens;
+  context.usage.outputTokens += usage.outputTokens;
+  const stage = context.activeStage;
+  if (stage) {
+    context.stats[stage].inputTokens += usage.inputTokens;
+    context.stats[stage].outputTokens += usage.outputTokens;
+  }
+};
+
+/**
  * Per-listing state for one run, shared by the tools.
  *
  * Tools take a `listing_id` and read and write here rather than passing results

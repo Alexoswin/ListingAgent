@@ -148,6 +148,7 @@ npx ts-node src/scripts/seed-listings.ts   # inserts a dummy seller and 20 dummy
 | Model calls inside tools | [`openai`](https://github.com/openai/openai-node) SDK — Chat Completions for vision, Responses API for web search |
 | Models | `gpt-4.1-mini` (drafting, vision, lookup) and `gpt-4.1` (verification) by default |
 | Schemas | [Zod](https://zod.dev/) 4, sent to OpenAI as strict JSON Schema structured output |
+| Images | [sharp](https://sharp.pixelplumbing.com/), to shrink photos before they reach a model |
 | Database | MongoDB via Mongoose (HTTP server only) |
 | Auth | Email + password, OTP email verification over AWS SES, JWT in an httpOnly cookie |
 | Uploads | Presigned S3 PUT URLs |
@@ -174,6 +175,20 @@ flowchart TD
 ### 1. Fetch images
 
 `ImageFetcher` downloads every image URL in parallel before either pass starts. An image is usable only if the response is a 2xx, has an `image/*` content type, is at least 2 KB, and arrives within 20 seconds. Usable images are kept as base64 data URLs and cached per URL for the life of the process. Both passes reuse the same bytes, and a URL shared by two listings is downloaded once.
+
+A photo whose longest edge is over **1536 px** is scaled down to fit, once, with [sharp](https://sharp.pixelplumbing.com/):
+
+- It is re-encoded as JPEG at quality 90.
+- EXIF orientation is applied first, so phone photos don't come out sideways.
+- Transparency is flattened onto white.
+
+A photo already within bounds is sent exactly as it came. A photo sharp can't decode is also sent as-is, with a warning in the log.
+
+Why 1536 px:
+
+- **It roughly halves image tokens on the drafting model.** gpt-4.1-mini charges for an image by its pixel area. Measured on real listing photos, a full-size phone photo costs 3,600–5,000 tokens there and 2,100–2,800 at 1536 px.
+- **The verifier loses nothing.** gpt-4.1 scales every image to 768 px on its short side before reading it, so it gets the same pixels and the same token count at 1536 px as at full size.
+- **The drafting pass still reads labels at a higher resolution than the pass that checks them.**
 
 Each image keeps its position in the listing's `images` array as its index. That index is how a specification cites the photo it was read from. Images that failed to load are described to the model as text ("did not load, cannot be cited") and never attached.
 
@@ -246,14 +261,16 @@ The reviewer can escalate a listing but cannot publish one on its own authority.
 
 ### Cost per listing
 
-A listing makes up to 8 Pass A turns, one vision call, at most one web-search call per distinct `product_lookup`, and usually a single Pass B turn (3 at most). Every call's token usage, including calls made inside tools, is added up in `diagnostics.usage`. Per-pass figures are in `diagnostics.stages`.
+A listing makes up to 8 Pass A turns, one vision call, at most one web-search call per distinct `product_lookup`, and usually a single Pass B turn (3 at most). Every call's token usage, including calls made inside tools, is added up in `diagnostics.usage`. Per-pass figures are in `diagnostics.stages`, where a tool's calls count toward the pass that called it.
+
+Token counts are not cost. At OpenAI's list prices gpt-4.1 costs five times as much per token as gpt-4.1-mini, so a few thousand Pass B tokens can cost more than all of Pass A. Web search is also billed per call, on top of its tokens.
 
 Images are the largest input cost, so the agent is careful about where they go:
 
 | Call | Photos attached? |
 |---|---|
 | Pass A turns | No. Pass A sees the photos only through `analyze_images`. |
-| `analyze_images` | Yes, at full detail, since reading spec labels is the point. Runs once per listing and is cached after that. |
+| `analyze_images` | Yes, at up to 1536 px, since reading spec labels is the point. Runs once per listing and is cached after that. On gpt-4.1-mini this is usually the largest single call: about 2,100–2,800 tokens per photo. |
 | `product_lookup` | Only when `analyze_images` could read neither a brand nor model text off the item. Otherwise it gets the analysis as text. |
 | Pass B | Yes, once, in its first message. |
 
@@ -399,7 +416,7 @@ Illustrative example (trimmed; not copied from a real run):
   - the images submitted and loaded;
   - the two models used (`generate → verify`), and whether they differ (`decorrelated`);
   - the total input/output tokens for the listing;
-  - `stages`: per pass (`generation` / `validation`), the model, duration, tokens, whether it completed, and a call count for each tool. Also holds the number of draft attempts.
+  - `stages`: per pass (`generation` / `validation`), the model, duration, tokens, whether it completed, and a call count for each tool. Also holds the number of draft attempts. A pass's tokens include the model calls its tools made (the vision call and the web search), so the two passes add up to `usage`.
 
 ## Categories and condition tiers
 
@@ -474,6 +491,8 @@ MongoDB collections (Mongoose schemas, all with `createdAt` / `updatedAt`):
 | `agentrunlogs` | [`agent-run-log.schema.ts`](src/agent-logs/schemas/agent-run-log.schema.ts) | One document per `POST /listings/generate` run. Holds the listing, seller, start/end time, duration, and status (`running` / `completed` / `failed`). Also the verdict, whether the listing was saved, images submitted and loaded, per-stage `stats`, token and tool-call totals, finding/omission/violation counts, and the failing stage and error message. |
 | `product_lookup_cache` | [`product-lookup-cache-entry.schema.ts`](src/product-lookups/schemas/product-lookup-cache-entry.schema.ts) | Cached `product_lookup` results: the normalised key, the lookup, its evidence, up to 5 source URLs, and `expiresAt`. A TTL index removes entries once they expire, 30 days after they were written. |
 
+Stage token counts in `agentrunlogs` include tool calls only for runs from after that change. Older runs recorded only each pass's own turns, so their two stages add up to less than `totalInputTokens`. The gap is the vision and search calls.
+
 Tool-call counts in `agentrunlogs` are keyed by tool name, with every current tool present even at zero. Runs from before Pass B lost its tools also have a `check_draft` key, and can have non-zero `check_draft` and `product_lookup` counts under `validation`. Newer runs have no `check_draft` key, and every validation count except `submit_review` is zero.
 
 ## Logging
@@ -486,7 +505,7 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 | `AgentRunner` | Each pass's start (with model) and finish (with time and tokens); turn-limit and no-submit failures. |
 | `AgentTools` | What each tool did: what the vision call saw; the lookup query, whether photos were attached, and the result, or a cache hit with no model call; draft accepted or rejected (with violation codes); review verdict and counts. |
 | `ProductLookupCache` | Warnings when the cache's database can't be read or written. |
-| `ImageFetcher` | Each unusable image and why. |
+| `ImageFetcher` | Each image resized, with its original dimensions and size before and after; each unusable image and why; a warning when an image couldn't be resized and was sent as-is. |
 | `ListingsService` | HTTP generate requests, and whether the listing was saved as published or held. |
 | `RunAgent` (CLI) | Listing count and models at start; publish/escalate totals and token usage at the end. |
 
@@ -503,7 +522,7 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 │   │   ├── draft-checker.ts        # checkDraft(): the rule checks
 │   │   ├── schemas.ts              # Zod schemas: image analysis, lookup, draft (pdpSchema), review
 │   │   ├── types.ts                # SellerListing, RunContext, Violation, image-part helpers
-│   │   ├── image-fetcher.ts        # downloads, validates, and caches listing images
+│   │   ├── image-fetcher.ts        # downloads, validates, shrinks to 1536 px, and caches listing images
 │   │   ├── agent.config.ts         # resolves models and concurrency from env
 │   │   ├── agent.module.ts
 │   │   └── prompts/
