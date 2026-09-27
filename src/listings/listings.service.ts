@@ -1,4 +1,5 @@
 import {
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,6 +9,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { AgentService } from '../agent/agent.service';
 import { AgentLogsService } from '../agent-logs/agent-logs.service';
+import { ListingApiLogsService } from '../agent-logs/listing-api-logs.service';
 import type { JsonRecord } from '../common/types/json-value';
 import { Image, ImageDocument } from '../images/schemas/image.schema';
 import { CreateListingDto } from './dto/create-listing.dto';
@@ -43,6 +45,7 @@ export class ListingsService {
     private readonly images: Model<ImageDocument>,
     private readonly agent: AgentService,
     private readonly agentLogs: AgentLogsService,
+    private readonly apiLogs: ListingApiLogsService,
   ) {}
 
   async findAll(page: number, limit: number, category?: Category) {
@@ -132,12 +135,43 @@ export class ListingsService {
    * until a person clears it.
    */
   async generate(sellerId: string, dto: GenerateListingDto) {
+    const requestedAt = new Date();
     const listingId = new Types.ObjectId();
+    const log = await this.agentLogs.start(sellerId, listingId, dto.imageUrls.length);
+    const entry = {
+      endpoint: 'POST /listings/generate',
+      sellerId,
+      runLogId: log._id,
+      listingId,
+      requestedAt,
+      input: { ...dto } as Record<string, unknown>,
+    };
+    try {
+      const response = await this.runGenerate(sellerId, dto, listingId, log._id);
+      await this.apiLogs.record({ ...entry, statusCode: 201, output: response as unknown as Record<string, unknown> });
+      return response;
+    } catch (error) {
+      await this.apiLogs.record({
+        ...entry,
+        statusCode: error instanceof HttpException ? error.getStatus() : 500,
+        output: error instanceof HttpException ? (error.getResponse() as Record<string, unknown>) : undefined,
+        error,
+      });
+      throw error;
+    }
+  }
+
+  private async runGenerate(
+    sellerId: string,
+    dto: GenerateListingDto,
+    listingId: Types.ObjectId,
+    logId: Types.ObjectId,
+  ) {
     const id = listingId.toString();
     this.logger.log(
       `Generate ${id}: seller ${sellerId}, ${dto.category}, ${dto.imageUrls.length} image(s)`,
     );
-    const log = await this.agentLogs.start(sellerId, listingId, dto.imageUrls.length);
+    const log = { _id: logId };
     let result;
     try {
       result = await this.agent.runListing({
