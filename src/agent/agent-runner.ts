@@ -18,6 +18,8 @@ export interface PassOptions {
   tools: FunctionTool<RunContext, any, any>[];
   /** Guards against a model that calls tools forever without finishing. */
   maxSteps: number;
+  /** Sampling temperature for every turn of the pass. */
+  temperature: number;
   /** The per-listing state the tools read and write. */
   context: RunContext;
   label: string;
@@ -47,9 +49,7 @@ export async function runPass(options: PassOptions): Promise<boolean> {
     model: options.model,
     instructions: options.system,
     tools: options.tools,
-    // Low but not zero: near-deterministic, while still leaving a rejected
-    // draft room to come back different on the retry.
-    modelSettings: { temperature: 0.2 },
+    modelSettings: { temperature: options.temperature },
     /**
      * The loop's real exit. `stopAtToolNames` would stop on any submit call,
      * including one rejected for the wrong shape, which has to go back to the

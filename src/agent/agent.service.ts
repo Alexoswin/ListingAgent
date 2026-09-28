@@ -133,6 +133,9 @@ export class AgentService {
           submitDraftTool(deps),
         ],
         maxSteps: 8,
+        // Low but not zero: near-deterministic, while still leaving a draft
+        // sent back for the wrong shape room to come back different.
+        temperature: 0.2,
         context,
         label: `generate:${listing.listing_id}`,
         stage: 'generation',
@@ -147,6 +150,10 @@ export class AgentService {
           tools: [submitReviewTool(deps)],
           // One turn to submit, with room to resubmit a malformed review.
           maxSteps: 3,
+          // Zero: the same draft and photos should get the same review, so every
+          // listing is judged the same way. The API does not promise identical
+          // output even at zero, but nothing gets closer.
+          temperature: 0,
           context,
           label: `verify:${listing.listing_id}`,
           stage: 'validation',

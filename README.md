@@ -227,10 +227,12 @@ The reviewer checks each claim on its own terms:
 It also checks:
 
 - that every value in the seller's `condition_details` has a disclosure entry, copied exactly and graded honestly (a real defect graded as a mere "claim" counts as an omission);
+- that every fact the description asserts traces to a photo, a lookup result or a seller field, and that seller claims are worded as the seller's rather than as fact;
+- that `functional_condition` doesn't state as fact what the photos can't show — a working condition that rests on the seller must be worded as the seller's;
 - that every photo shows the actual unit rather than a catalogue image, and every image the draft cites actually loaded;
 - whether the tier, title, MRP and category fit the evidence, and the subcategory belongs to the chosen category.
 
-`submit_review` is its only tool, so it normally finishes in a single turn. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
+`submit_review` is its only tool, so it normally finishes in a single turn. It runs at temperature 0, so the same draft and photos get the same review as far as the API allows; the drafting pass runs at 0.2. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
 
 The reviewer does not run its own web search. Its MRP check rests on Pass A's lookup results, which are in its brief along with whether each came from the web or model knowledge.
 
