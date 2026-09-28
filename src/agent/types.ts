@@ -32,17 +32,6 @@ export interface SellerListing {
   images: string[];
 }
 
-/**
- * A problem found by the draft checker. `blocking` forces `human_review_needed`
- * whatever either model concluded — these are the checks that cover the failure
- * two passes cannot, where the evidence itself misleads both of them.
- */
-export interface Violation {
-  code: string;
-  severity: 'blocking' | 'warning';
-  message: string;
-}
-
 /** Where a lookup's answer actually came from. */
 export interface ProductLookupResult extends ProductLookup {
   evidence: 'web' | 'model_knowledge';
@@ -70,7 +59,6 @@ export interface AgentStageStats {
 export interface AgentRunStats {
   generation: AgentStageStats;
   validation: AgentStageStats;
-  draftAttempts: number;
 }
 
 const createStageStats = (): AgentStageStats => ({
@@ -87,7 +75,6 @@ const createStageStats = (): AgentStageStats => ({
 export const createAgentRunStats = (): AgentRunStats => ({
   generation: createStageStats(),
   validation: createStageStats(),
-  draftAttempts: 0,
 });
 
 export const recordToolCall = (context: RunContext, tool: AgentToolName) => {
@@ -134,11 +121,10 @@ export interface RunContext {
   lookups: ProductLookupResult[];
   draft: GeneratedPdp | null;
   review: AgentReview | null;
-  violations: Violation[];
   /**
    * Set by whichever tool ends a pass. The Agents SDK loop reads it once per
-   * turn to decide whether the pass is finished — a rejected draft leaves it
-   * false so the model gets another attempt.
+   * turn to decide whether the pass is finished — a submission with the wrong
+   * shape leaves it false so the model can resubmit.
    */
   finished: boolean;
   usage: { inputTokens: number; outputTokens: number };
@@ -157,7 +143,6 @@ export function createRunContext(
     lookups: [],
     draft: null,
     review: null,
-    violations: [],
     finished: false,
     usage: { inputTokens: 0, outputTokens: 0 },
     activeStage: null,

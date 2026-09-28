@@ -62,9 +62,6 @@ export class AgentRunLog {
   @Prop({ min: 0 })
   omissionCount?: number;
 
-  @Prop({ min: 0 })
-  violationCount?: number;
-
   @Prop({ trim: true })
   errorStage?: 'generation' | 'validation' | 'persistence';
 

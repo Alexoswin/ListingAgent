@@ -4,7 +4,6 @@ import { z } from 'zod';
 import type { LlmService } from '../llm/llm.service';
 import type { LlmWebSearchResponse } from '../llm/llm.types';
 import type { AgentConfig } from './agent.config';
-import { checkDraft, hasBlocking, summarize } from './draft-checker';
 import { lookupKey, type ProductLookupCache } from './product-lookup-cache';
 import {
   imageAnalysisSchema,
@@ -19,7 +18,6 @@ import {
   recordUsage,
   usableImages,
   type RunContext,
-  type Violation,
 } from './types';
 
 export interface ToolDeps {
@@ -28,9 +26,6 @@ export interface ToolDeps {
   context: RunContext;
   lookupCache: ProductLookupCache;
 }
-
-/** After this many rejected drafts, keep what there is and let review sort it out. */
-const MAX_DRAFT_ATTEMPTS = 3;
 
 const listingIdArg = z.strictObject({
   listing_id: z.string().describe('The listing being processed.'),
@@ -45,12 +40,6 @@ const asText = (value: unknown) =>
 /** Log prefix: which listing, which tool. */
 const tag = (context: RunContext, tool: string) =>
   `${context.listing.listing_id} ${tool}`;
-
-/** Violation codes at one severity, for log lines. */
-const codesOf = (violations: Violation[], severity: Violation['severity']) =>
-  violations
-    .filter((violation) => violation.severity === severity)
-    .map((violation) => violation.code);
 
 /**
  * Logs a failed model call, then rethrows it. The Agents SDK catches a tool's
@@ -343,21 +332,16 @@ export const productLookupTool = (deps: ToolDeps) =>
   });
 
 /**
- * The only exit from the generation pass, and where the rule checks run.
+ * The only exit from the generation pass.
  *
- * Validation lives here rather than in a tool the model may call, for two
- * reasons: a model that can skip its own check eventually does, and asking it
- * to pass a draft to a checker and then the same draft to a submitter means
- * writing the whole thing out twice. A rejected draft comes back as violations,
- * so the pass self-corrects before review ever sees it.
+ * Checking the draft is the verification pass's job, so this only makes sure it
+ * has the right shape. A malformed draft goes back to the model to resubmit.
  */
-export function submitDraftTool(deps: ToolDeps) {
-  let attempts = 0;
-
-  return tool({
+export const submitDraftTool = (deps: ToolDeps) =>
+  tool({
     name: 'submit_draft',
     description:
-      'Submit the finished listing. It is checked against the images and the seller submission before it is accepted; if it comes back with problems, fix them and submit again.',
+      'Submit the finished listing. This ends drafting; an independent reviewer then checks it against the photographs and the seller submission.',
     parameters: pdpSchema,
     execute(args) {
       const { context } = deps;
@@ -371,43 +355,14 @@ export function submitDraftTool(deps: ToolDeps) {
         return `Draft rejected — wrong shape:\n${issues(parsed.error)}`;
       }
 
-      attempts++;
-      context.stats.draftAttempts = attempts;
       context.draft = parsed.data;
-      context.violations = checkDraft(context);
-      const blocking = codesOf(context.violations, 'blocking');
-      const warnings = codesOf(context.violations, 'warning');
-
-      if (!hasBlocking(context.violations)) {
-        context.finished = true;
-        logger.log(
-          `${step}: accepted on attempt ${attempts}${warnings.length ? `, warnings: ${warnings.join(', ')}` : ''}`,
-        );
-        return `Draft accepted.\n${summarize(context.violations)}`;
-      }
-      if (attempts >= MAX_DRAFT_ATTEMPTS) {
-        // Keep the draft and let verification see it with its violations
-        // attached — an escalated listing beats a failed one.
-        logger.error(
-          `${step}: still blocking after ${attempts} attempts (${blocking.join(', ')}), escalating`,
-        );
-        context.finished = true;
-        return 'Draft kept with unresolved problems; it will be escalated.';
-      }
-
-      logger.warn(
-        `${step}: attempt ${attempts} rejected — ${blocking.join(', ')}`,
+      context.finished = true;
+      logger.log(
+        `${step}: accepted — ${parsed.data.specifications.length} spec(s), tier ${parsed.data.condition.tier}`,
       );
-      return [
-        'Draft rejected. Fix every blocking problem and submit again.',
-        '',
-        summarize(context.violations),
-        '',
-        'Dropping an unsupportable specification is a valid fix. So is lowering the condition tier, or leaving original_mrp null.',
-      ].join('\n');
+      return 'Draft submitted for review.';
     },
   });
-}
 
 /** The verification pass's only exit. */
 export const submitReviewTool = (deps: ToolDeps) =>

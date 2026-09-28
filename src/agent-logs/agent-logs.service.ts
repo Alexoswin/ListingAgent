@@ -54,7 +54,6 @@ export class AgentLogsService {
           totalToolCalls,
           findingCount: result.review.findings.length,
           omissionCount: result.review.omissions.length,
-          violationCount: result.review.rule_violations.length,
         },
       },
     );

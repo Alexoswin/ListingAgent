@@ -1,36 +1,34 @@
-import { Logger } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 
-/** Drafting runs on the cheaper model; verification gets the stronger one. */
-const DEFAULT_GENERATE_MODEL = 'gpt-4.1-mini';
-const DEFAULT_VERIFY_MODEL = 'gpt-4.1';
+/**
+ * The passes run on different models on purpose: a second opinion from the
+ * same model on the same photo is barely a second opinion, because the priors
+ * that produced the first reading produce the second one too. Two models from
+ * one family share training data, so this decorrelates the passes less than two
+ * vendors would.
+ *
+ * Constants, not env vars: which model runs a pass is a code decision, and
+ * `.env` holds secrets only. Drafting runs on the cheaper model; verification
+ * gets the stronger one.
+ */
+const GENERATE_MODEL: string = 'gpt-4.1-mini';
+const VERIFY_MODEL: string = 'gpt-4.1';
 
 export interface AgentConfig {
   /** Drafting pass, and the vision and lookup calls it makes. */
   generate: string;
-  /** Verification pass — a different model wherever possible. */
+  /** Verification pass — a different model from `generate`. */
   verify: string;
   /**
    * True when the passes run on different models. When false they share one
    * model's blind spots, so a photo that misleads the first tends to mislead
-   * the second the same way and the deterministic rules carry more of the load.
+   * the second the same way.
    */
   decorrelated: boolean;
   concurrency: number;
 }
 
-const logger = new Logger('AgentConfig');
-
-/**
- * Picks the models for a run.
- *
- * The passes default to different models on purpose: a second opinion from the
- * same model on the same photo is barely a second opinion, because the priors
- * that produced the first reading produce the second one too. Two models from
- * one family share training data, so this decorrelates the passes less than two
- * vendors would — the deterministic checks in `draft-checker` are what actually
- * catch the failure both passes share.
- */
+/** Picks the models and concurrency for a run. */
 export function resolveAgentConfig(config: ConfigService): AgentConfig {
   const get = (key: string) => config.get<string>(key);
 
@@ -38,20 +36,10 @@ export function resolveAgentConfig(config: ConfigService): AgentConfig {
     throw new Error('Set OPENAI_API_KEY in .env');
   }
 
-  const generate = get('AGENT_GENERATE_MODEL') ?? DEFAULT_GENERATE_MODEL;
-  const verify = get('AGENT_VERIFY_MODEL') ?? DEFAULT_VERIFY_MODEL;
-
-  const decorrelated = generate !== verify;
-  if (!decorrelated) {
-    logger.warn(
-      `Both passes run on "${generate}". Set AGENT_VERIFY_MODEL to a different model to decorrelate them.`,
-    );
-  }
-
   return {
-    generate,
-    verify,
-    decorrelated,
+    generate: GENERATE_MODEL,
+    verify: VERIFY_MODEL,
+    decorrelated: GENERATE_MODEL !== VERIFY_MODEL,
     concurrency: Number(get('AGENT_CONCURRENCY') ?? 3),
   };
 }

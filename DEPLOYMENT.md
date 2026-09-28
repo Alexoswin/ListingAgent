@@ -37,8 +37,6 @@ Set these as **Production** environment variables on `listing-agent-api`. Do not
 | `AWS_SECRET_ACCESS_KEY` | Yes | IAM credentials for S3 presigning and SES. |
 | `AWS_S3_BUCKET` | Yes | Listing image bucket. |
 | `SES_FROM_EMAIL` | Yes | SES-verified sender address. |
-| `AGENT_GENERATE_MODEL` | No | Overrides the default `gpt-4.1-mini`. |
-| `AGENT_VERIFY_MODEL` | No | Overrides the default `gpt-4.1`. |
 
 The S3 bucket CORS policy must allow `PUT`, `GET`, and `HEAD` from both `http://localhost:3000` and `https://listing-agent-frontend.vercel.app`, with `AllowedHeaders` set to `*`.
 

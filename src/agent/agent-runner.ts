@@ -51,9 +51,9 @@ export async function runPass(options: PassOptions): Promise<boolean> {
     // draft room to come back different on the retry.
     modelSettings: { temperature: 0.2 },
     /**
-     * The loop's real exit. `stopAtToolNames` would stop on any submit_draft,
-     * including a rejected one — the whole point is that a rejected draft goes
-     * back for another attempt. Only the tools themselves know which it was,
+     * The loop's real exit. `stopAtToolNames` would stop on any submit call,
+     * including one rejected for the wrong shape, which has to go back to the
+     * model for another attempt. Only the tools themselves know which it was,
      * so they set `context.finished` and this reads it, once per turn, after
      * every tool in that turn has run.
      */

@@ -1,6 +1,5 @@
 import type { LlmMessage } from '../../llm/llm.types';
 import { CATEGORY_SUBCATEGORIES } from '../../listings/enums/category.enum';
-import { summarize } from '../draft-checker';
 import { CONDITION_TIERS } from '../schemas';
 import { describeImages, imageParts, type RunContext } from '../types';
 import { getCategoryHints } from './category-spec-hints';
@@ -44,7 +43,7 @@ If a photograph or a lookup contradicts something the seller wrote — in the ti
 
 Two things are not corrections. A seller claim you simply cannot support is dropped or carried as "seller", as above. Adding precision is not contradicting: "15 inch" published as "15.6 inches" agrees with the seller.
 
-The draft is checked against the seller's values, so an override left out of seller_corrections comes back flagged.
+A reviewer reads the draft against the seller's values afterwards, and an override left out of seller_corrections sends the listing to a person.
 
 ## Condition
 
@@ -58,9 +57,9 @@ Seller claims you keep but cannot confirm — battery health, repair history, wh
 
 condition_details is a raw form dump. It mixes real defects ("Paint/Polish chips or scratches"), reassurances ("No Known Issues"), plain facts ("Original Charger Available"), and meaningless fragments — a bare "No", a year like "2026", a number like "11".
 
-Put one seller_disclosures entry against EVERY value in it, including the fragments and the ones you decided not to publish. Copy source_text exactly as written: it is matched character for character against the input, so tidying, rewording, merging two entries, or inventing one all fail the check.
+Put one seller_disclosures entry against EVERY value in it, including the fragments and the ones you decided not to publish. Copy source_text exactly as written — no tidying, rewording, merging two entries, or inventing one. A reviewer reads each entry against the seller's own words.
 
-Then say what each one is, and where it ended up. Judging which is which is your job — nothing else in the system can do it.
+Then say what each one is, and where it ended up. Judging which is which is your job.
 
 Anything you mark as a defect must appear in the listing. Quietly dropping a disclosed flaw is the worst thing you can do here, and marking a real defect as anything other than "defect" to avoid publishing it is the same failure wearing a different label.
 
@@ -76,7 +75,7 @@ Keep the seller's choice when it fits. Move it only when the photographs plainly
 
 1. analyze_images first, always.
 2. product_lookup for the original MRP, and to corroborate specs you could not read.
-3. submit_draft. It is checked automatically; if it comes back with problems, fix them and submit again.`;
+3. submit_draft, once, when the listing is finished. It ends drafting and goes straight to an independent reviewer who checks it against the photographs.`;
 
 export const VERIFY_SYSTEM = `You are checking a marketplace listing before it goes live. You did not write it and you know nothing about how it was produced.
 
@@ -94,7 +93,7 @@ Do not reason from what the product usually ships with. A 512GB variant being th
 
 ## Also check the disclosure accounting
 
-The draft carries a seller_disclosures entry for each value in the seller's condition_details, grading it and saying where it ended up. Read the seller's condition_details yourself and judge those gradings, because an automated check can only confirm every value was accounted for — not that it was graded honestly.
+The draft carries a seller_disclosures entry for each value in the seller's condition_details, grading it and saying where it ended up. Read the seller's condition_details yourself: check that every value has an entry, with source_text copied exactly and nothing invented, and judge each grading.
 
 A real defect graded "claim", "reassurance" or "not_a_disclosure" is how a flaw gets buried while still appearing to be handled. Look for exactly that. Anything graded "defect" but marked omitted, or graded down and then left out, belongs in omissions.
 
@@ -102,23 +101,25 @@ A real defect graded "claim", "reassurance" or "not_a_disclosure" is how a flaw 
 
 Photographs outrank seller text, so the draft may override the seller — and each override is listed in seller_corrections with its evidence. Treat every entry as a claim and record a finding for it: open the cited photograph or read the lookup result, and confirm the published value yourself. If the evidence does not plainly show it, the draft overrode the seller on nothing, and the correction is "contradicted" or "unverifiable".
 
-Then read the seller's title, description and specs yourself. Where the draft publishes something that contradicts them and seller_corrections does not list it, the override went unrecorded; check it the same way and record a finding. The rule checks flag the ones they can spot as unrecorded_seller_correction, but they match by key and unit and miss claims like a panel type.
+Then read the seller's title, description and specs yourself. Where the draft publishes something that contradicts them and seller_corrections does not list it, the override went unrecorded; check it the same way and record a finding.
 
 A correction the evidence confirms is not a reason to escalate — it is the draft doing its job. Two kinds are: one you cannot confirm yourself, and one that replaces a brand or model the seller named with a different one, because then the photographs may show a different unit from the one being sold.
 
 ## Also check
 
 - Anything the seller disclosed as a defect, or the photographs show, that the draft leaves out. Those go in omissions.
+- Whether every photograph shows the actual unit. A stock or catalogue image is not evidence of this item or its condition.
+- Whether every image_index the draft cites, in specifications or seller_corrections, is a photograph that loaded. Your brief lists the ones that did not.
 - Whether the condition tier matches the wear actually visible.
 - Whether the title claims anything the specifications do not carry.
-- Whether original_mrp is a plausible new price, and above the asking price.
-- Whether category and subcategory fit the item in the photographs. The header says where the seller filed it; if the draft moved it, check that the move is right. A wrong category is a contradicted claim.
-
-The automated rule checks have already been run over this draft; their results are in your brief. Account for every one of them.
+- Whether original_mrp is a plausible new price, above the asking price, and backed by the lookup results in your brief.
+- Whether category and subcategory fit the item in the photographs, and the subcategory is one listed under the chosen category:
+${TAXONOMY.replace(/^/gm, '  ')}
+  The header says where the seller filed it; if the draft moved it, check that the move is right. A wrong category is a contradicted claim.
 
 ## Verdict
 
-- human_review_needed — any contradicted claim, any omitted defect, any blocking rule violation, a correction you could not confirm or that changes the seller's brand or model, or anything a buyer could reasonably feel misled by.
+- human_review_needed — any contradicted claim, any omitted defect, a stock or catalogue photograph, a correction you could not confirm or that changes the seller's brand or model, or anything a buyer could reasonably feel misled by.
 - auto_publish — everything material is either confirmed or a clearly-labelled seller claim, and nothing contradicts the photographs.
 
 Escalating a sound listing costs someone two minutes; publishing a wrong one costs a buyer money. When genuinely torn, escalate — but do not escalate to avoid deciding: a listing whose claims you checked and confirmed should go live.
@@ -165,10 +166,10 @@ export function buildGenerateMessages(context: RunContext): LlmMessage[] {
  * the images only re-confirms whatever the first pass thought it saw.
  * Re-attaching the pixels is what makes disagreement possible.
  *
- * The rule-check results and lookup results ride along too. Neither breaks that
- * separation: the rules are deterministic code, and a lookup result is what a
- * web search returned, not what the drafting model concluded from it. The
- * draft already cites the MRP; this just lets the reviewer see what it rests on.
+ * The lookup results ride along too. That does not break the separation: a
+ * lookup result is what a web search returned, not what the drafting model
+ * concluded from it. The draft already cites the MRP; this just lets the
+ * reviewer see what it rests on.
  */
 export function buildVerifyMessages(context: RunContext): LlmMessage[] {
   return [
@@ -185,9 +186,6 @@ export function buildVerifyMessages(context: RunContext): LlmMessage[] {
             '',
             'Draft listing to check:',
             JSON.stringify(context.draft, null, 2),
-            '',
-            'Automated rule checks, already run over this draft:',
-            summarize(context.violations),
             '',
             describeLookups(context),
             '',

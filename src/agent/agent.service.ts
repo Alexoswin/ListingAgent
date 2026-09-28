@@ -2,7 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LlmService } from '../llm/llm.service';
 import { resolveAgentConfig, type AgentConfig } from './agent.config';
-import { checkDraft, hasBlocking } from './draft-checker';
 import { ImageFetcher } from './image-fetcher';
 import { ProductLookupCache } from './product-lookup-cache';
 import {
@@ -25,7 +24,6 @@ import {
   usableImages,
   type RunContext,
   type SellerListing,
-  type Violation,
 } from './types';
 
 export interface ListingResult {
@@ -36,7 +34,6 @@ export interface ListingResult {
     findings: AgentReview['findings'];
     omissions: string[];
     notes: string;
-    rule_violations: Violation[];
     /** Why the run escalated, when the reviewing model did not ask it to. */
     escalation_reasons: string[];
   };
@@ -99,11 +96,10 @@ export class AgentService {
    * One listing: fetch the images once, draft, then verify the draft in a pass
    * that shares none of the drafting context.
    *
-   * The verify pass gets no tools but its exit. It used to call `check_draft`
-   * and `product_lookup` itself — but its opening turn carries the photographs,
-   * and the agent loop re-sends that whole turn on every tool call, so each
-   * call re-bought every image on the most expensive model. Both answers are
-   * now worked out before the pass starts and handed to it in its brief.
+   * The verify pass gets no tools but its exit. Its opening turn carries the
+   * photographs, and the agent loop re-sends that whole turn on every tool
+   * call, so each call would re-buy every image on the most expensive model.
+   * What it needs from Pass A — the lookup results — is in its brief instead.
    */
   async runListing(listing: SellerListing): Promise<ListingResult> {
     const id = listing.listing_id;
@@ -144,9 +140,6 @@ export class AgentService {
 
       if (context.draft) {
         stage = 'verify';
-        // Pure code, no model: run it here so the verify pass reads the result
-        // instead of spending a turn — and a re-send of every photo — asking.
-        context.violations = checkDraft(context);
         await runPass({
           model: this.config.verify,
           system: VERIFY_SYSTEM,
@@ -208,12 +201,10 @@ export class AgentService {
    * The reviewing model's verdict is honoured when it says escalate, and only
    * nominates when it says publish. Two of the checks below read the model's
    * own findings back to it: a review that lists a contradicted claim and then
-   * votes to publish is a real and common failure. The rest do not depend on
-   * anything a model saw, which is what covers a photograph that misleads both
-   * passes the same way — no amount of looking again would catch that.
+   * votes to publish is a real and common failure.
    */
   private assemble(context: RunContext): ListingResult {
-    const { listing, draft, review, violations } = context;
+    const { listing, draft, review } = context;
     const contradicted = (review?.findings ?? []).filter(
       (finding) => finding.status === 'contradicted',
     );
@@ -221,11 +212,6 @@ export class AgentService {
     const escalations = [
       !draft && 'No draft was produced.',
       !review && 'No review was produced.',
-      hasBlocking(violations) &&
-        `Blocking rule violations: ${violations
-          .filter((violation) => violation.severity === 'blocking')
-          .map((violation) => violation.code)
-          .join(', ')}.`,
       contradicted.length > 0 &&
         `Review contradicted: ${contradicted.map((finding) => finding.claim).join('; ')}.`,
       (review?.omissions.length ?? 0) > 0 &&
@@ -245,7 +231,6 @@ export class AgentService {
         findings: review?.findings ?? [],
         omissions: review?.omissions ?? [],
         notes: review?.notes ?? 'Verification did not complete.',
-        rule_violations: violations,
         escalation_reasons: escalations,
       },
       publish: verdict === 'auto_publish',

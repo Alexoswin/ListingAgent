@@ -25,8 +25,8 @@ export const VERDICTS = ['auto_publish', 'human_review_needed'] as const;
 /**
  * How a line in the seller's `condition_details` reads.
  *
- * Deciding which of these applies is language comprehension, so the model does
- * it. The checker only verifies that every line got one — see `draft-checker`.
+ * Deciding which of these applies is language comprehension, so the drafting
+ * model does it and the verifying model checks it.
  */
 export const SELLER_DISCLOSURE_KINDS = [
   'defect',
@@ -194,7 +194,7 @@ export const pdpSchema = z.strictObject({
         source_text: z
           .string()
           .describe(
-            'One entry from condition_details, copied character for character. It is matched exactly against the input, so do not tidy, reword, or merge entries.',
+            'One entry from condition_details, copied character for character. The reviewer reads it against the input, so do not tidy, reword, or merge entries.',
           ),
         kind: z
           .enum(SELLER_DISCLOSURE_KINDS)
@@ -207,7 +207,7 @@ export const pdpSchema = z.strictObject({
       }),
     )
     .describe(
-      "One entry for EVERY value in the seller's condition_details, including the ones you decided not to publish. This is checked against the input for completeness, so a missing entry fails.",
+      "One entry for EVERY value in the seller's condition_details, including the ones you decided not to publish. The reviewer checks this against the input for completeness.",
     ),
 });
 
