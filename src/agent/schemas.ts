@@ -152,6 +152,27 @@ export const pdpSchema = z.strictObject({
       confidence: z.number().describe('0 to 1, for this exact value.'),
     }),
   ),
+  seller_corrections: z
+    .array(
+      z.strictObject({
+        seller_claim: z
+          .string()
+          .describe(
+            "The seller's words that the evidence contradicts, quoted from their title, description, brand, model or specs.",
+          ),
+        published_value: z.string().describe('What the listing says instead.'),
+        evidence: z.enum(['image', 'lookup']),
+        image_index: z
+          .number()
+          .int()
+          .nullable()
+          .describe('Required when evidence is "image". Null otherwise.'),
+        note: z.string().describe('What the evidence shows, in one sentence.'),
+      }),
+    )
+    .describe(
+      'One entry for every place the listing overrides something the seller wrote because a photo or lookup says otherwise. A seller claim you only could not support is not a correction; drop it instead. Empty when nothing was overridden.',
+    ),
   condition: z.strictObject({
     tier: z.enum(CONDITION_TIERS),
     visual_condition: z.string().describe('What the photos show.'),
