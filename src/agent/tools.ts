@@ -9,7 +9,6 @@ import {
   imageAnalysisSchema,
   pdpSchema,
   productLookupSchema,
-  reviewSchema,
   type ProductLookup,
 } from './schemas';
 import {
@@ -361,33 +360,6 @@ export const submitDraftTool = (deps: ToolDeps) =>
         `${step}: accepted — ${parsed.data.specifications.length} spec(s), tier ${parsed.data.condition.tier}`,
       );
       return 'Draft submitted for review.';
-    },
-  });
-
-/** The verification pass's only exit. */
-export const submitReviewTool = (deps: ToolDeps) =>
-  tool({
-    name: 'submit_review',
-    description:
-      'Submit your verification result: per-claim findings, any omissions, and the verdict.',
-    parameters: reviewSchema,
-    execute(args) {
-      recordToolCall(deps.context, 'submit_review');
-      const step = tag(deps.context, 'submit_review');
-      const parsed = reviewSchema.safeParse(args);
-      if (!parsed.success) {
-        logger.warn(
-          `${step}: rejected, wrong shape (${parsed.error.issues.length} issue(s))`,
-        );
-        return `Review rejected — wrong shape:\n${issues(parsed.error)}`;
-      }
-      const { verdict, findings, omissions } = parsed.data;
-      deps.context.review = parsed.data;
-      deps.context.finished = true;
-      logger.log(
-        `${step}: ${verdict} — ${findings.length} finding(s), ${findings.filter((finding) => finding.status === 'contradicted').length} contradicted, ${omissions.length} omission(s)`,
-      );
-      return 'Review recorded.';
     },
   });
 

@@ -164,7 +164,7 @@ flowchart TD
     A["2. Pass A — Generate<br/>gpt-4.1-mini · up to 8 turns<br/>tools: analyze_images, product_lookup, submit_draft"]
     A -->|draft submitted| B
     A -->|no draft| GATE
-    B["3. Pass B — Verify<br/>gpt-4.1 · up to 3 turns<br/>sees seller data + draft + photos,<br/>plus lookup results<br/>tool: submit_review"]
+    B["3. Pass B — Verify<br/>gpt-4.1 · single turn<br/>sees seller data + draft + photos,<br/>plus lookup results<br/>no tools, structured output"]
     B --> GATE
     GATE["4. Verdict gate (plain code, no model)<br/>can only tighten the reviewer's verdict"]
     GATE --> OUT["ListingResult<br/>generated_pdp · review · publish · diagnostics"]
@@ -232,7 +232,7 @@ It also checks:
 - that every photo shows the actual unit rather than a catalogue image, and every image the draft cites actually loaded;
 - whether the tier, title, MRP and category fit the evidence, and the subcategory belongs to the chosen category.
 
-`submit_review` is its only tool, so it normally finishes in a single turn. It runs at temperature 0, so the same draft and photos get the same review as far as the API allows; the drafting pass runs at 0.2. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
+It has no tools: it answers in a single turn, and its final message is validated against `reviewSchema` by the Agents SDK. If that message fails the schema, or the model refuses, the pass produces no review and the listing escalates. It runs at temperature 0, so the same draft and photos get the same review as far as the API allows; the drafting pass runs at 0.2. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
 
 The reviewer does not run its own web search. Its MRP check rests on Pass A's lookup results, which are in its brief along with whether each came from the web or model knowledge.
 
@@ -272,7 +272,7 @@ Images are the largest input cost, so the agent is careful about where they go:
 | `product_lookup` | Only when `analyze_images` could read neither a brand nor model text off the item. Otherwise it gets the analysis as text. |
 | Pass B | Yes, once, in its first message. |
 
-Pass B has no tools besides `submit_review` because the Agents SDK re-sends the whole conversation, photos included, on every turn. Each tool call would have paid for every photo again, on the more expensive model.
+Pass B has no tools because the Agents SDK re-sends the whole conversation, photos included, on every turn. Each tool call would have paid for every photo again, on the more expensive model.
 
 **Lookup cache.** `product_lookup` results are cached by brand, model and category. The key ignores case, punctuation and spacing, so `ASUS TUF-Gaming F15` and `asus tuf gaming f15` share an entry. A repeat product costs no model call and no search.
 
@@ -287,7 +287,6 @@ Pass B has no tools besides `submit_review` because the Agents SDK re-sends the 
 | `analyze_images` | A | `listing_id` | Sends every usable photo to the drafting model (temperature 0) and returns structured observations: per-image notes (shows the product? stock/catalogue render?), brand and model text visible on the item, readable specs each marked `legible: true/false`, visible damage, and visible accessories. The result is cached for the listing, so a second call is free. If no image loaded, it says so and makes no call. | Yes — vision |
 | `product_lookup` | A | `brand`, `model`, `category` | Finds the product's original launch price in INR and its manufacturer specs. Checks the [lookup cache](#cost-per-listing) first and returns a cached answer without any model call. Otherwise it uses OpenAI's hosted web search on the Responses API. At least one search is forced, and results are biased to India. The search gets what `analyze_images` read legibly (brand, model text, readable details, accessories) as text. The photos are attached only when nothing identifying was legible. If the search throws, it answers from model knowledge instead. The result is marked `lookup_web` only if the search returned at least one URL, otherwise `lookup_model_knowledge`. Returns up to 5 source URLs. | Yes — web search, unless cached |
 | `submit_draft` | A | the full draft (`pdpSchema`) | Validates the draft's shape and stores it; a malformed draft goes back to the model. The only way Pass A ends. | No |
-| `submit_review` | B | the full review (`reviewSchema`) | Validates the shape and records the review. Pass B's only tool, and the only way it ends. | No |
 
 Tools don't pass data to each other through the model. They read and write a shared per-listing `RunContext`: images, image analysis, lookups, draft, review, token usage.
 
@@ -458,7 +457,7 @@ MongoDB collections (Mongoose schemas, all with `createdAt` / `updatedAt`):
 
 Stage token counts in `agentrunlogs` include tool calls only for runs from after that change. Older runs recorded only each pass's own turns, so their two stages add up to less than `totalInputTokens`. The gap is the vision and search calls.
 
-Tool-call counts in `agentrunlogs` are keyed by tool name, with every current tool present even at zero. Runs from before Pass B lost its tools also have a `check_draft` key, and can have non-zero `check_draft` and `product_lookup` counts under `validation`. Newer runs have no `check_draft` key, and every validation count except `submit_review` is zero.
+Tool-call counts in `agentrunlogs` are keyed by tool name, with every current tool present even at zero. Runs from before Pass B lost its tools also have a `check_draft` key, and can have non-zero `check_draft` and `product_lookup` counts under `validation`. Newer runs have no `check_draft` key, and every validation count is zero, since Pass B has no tools. Runs from before Pass B returned structured output also have a `submit_review` count of 1 under `validation`.
 
 ## Logging
 
@@ -481,8 +480,8 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 ├── src/
 │   ├── agent/                      # the agent — no database dependency
 │   │   ├── agent.service.ts        # runListing(): fetch images → Pass A → Pass B → verdict gate; run(): concurrency pool
-│   │   ├── agent-runner.ts         # runPass(): one Agents SDK run with the "a tool must finish it" exit rule
-│   │   ├── tools.ts                # analyze_images, product_lookup, submit_draft, submit_review
+│   │   ├── agent-runner.ts         # runPass(): Pass A, ended by a tool; runStructuredPass(): Pass B, one turn with structured output
+│   │   ├── tools.ts                # analyze_images, product_lookup, submit_draft
 │   │   ├── product-lookup-cache.ts # lookup cache: in memory, plus an optional persistent store
 │   │   ├── schemas.ts              # Zod schemas: image analysis, lookup, draft (pdpSchema), review
 │   │   ├── types.ts                # SellerListing, RunContext, Violation, image-part helpers

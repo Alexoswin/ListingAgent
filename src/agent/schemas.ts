@@ -212,7 +212,7 @@ export const pdpSchema = z.strictObject({
 });
 
 /**
- * The verification result, and the arguments to `submit_review`.
+ * The verification result, and the verify pass's structured output.
  *
  * `findings` is declared before `verdict` on purpose: generation runs left to
  * right, so the model commits to per-claim evidence before it names a verdict.

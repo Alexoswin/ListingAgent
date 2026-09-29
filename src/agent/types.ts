@@ -41,7 +41,6 @@ export const AGENT_TOOL_NAMES = [
   'analyze_images',
   'product_lookup',
   'submit_draft',
-  'submit_review',
 ] as const;
 
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];

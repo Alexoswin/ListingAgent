@@ -10,13 +10,17 @@ import {
   GENERATE_SYSTEM,
   VERIFY_SYSTEM,
 } from './prompts/pass-prompts';
-import type { AgentReview, GeneratedPdp, Verdict } from './schemas';
-import { runPass } from './agent-runner';
+import {
+  reviewSchema,
+  type AgentReview,
+  type GeneratedPdp,
+  type Verdict,
+} from './schemas';
+import { runPass, runStructuredPass } from './agent-runner';
 import {
   analyzeImagesTool,
   productLookupTool,
   submitDraftTool,
-  submitReviewTool,
   type ToolDeps,
 } from './tools';
 import {
@@ -96,10 +100,11 @@ export class AgentService {
    * One listing: fetch the images once, draft, then verify the draft in a pass
    * that shares none of the drafting context.
    *
-   * The verify pass gets no tools but its exit. Its opening turn carries the
-   * photographs, and the agent loop re-sends that whole turn on every tool
-   * call, so each call would re-buy every image on the most expensive model.
-   * What it needs from Pass A — the lookup results — is in its brief instead.
+   * The verify pass gets no tools: it answers in a single turn. Its opening
+   * turn carries the photographs, and the agent loop re-sends that whole turn
+   * on every tool call, so each call would re-buy every image on the most
+   * expensive model. What it needs from Pass A — the lookup results — is in its
+   * brief instead.
    */
   async runListing(listing: SellerListing): Promise<ListingResult> {
     const id = listing.listing_id;
@@ -143,13 +148,11 @@ export class AgentService {
 
       if (context.draft) {
         stage = 'verify';
-        await runPass({
+        context.review = await runStructuredPass({
           model: this.config.verify,
           system: VERIFY_SYSTEM,
           messages: buildVerifyMessages(context),
-          tools: [submitReviewTool(deps)],
-          // One turn to submit, with room to resubmit a malformed review.
-          maxSteps: 3,
+          outputType: reviewSchema,
           // Zero: the same draft and photos should get the same review, so every
           // listing is judged the same way. The API does not promise identical
           // output even at zero, but nothing gets closer.
@@ -158,6 +161,12 @@ export class AgentService {
           label: `verify:${listing.listing_id}`,
           stage: 'validation',
         });
+        if (context.review) {
+          const { verdict, findings, omissions } = context.review;
+          this.logger.log(
+            `Listing ${id}: review ${verdict} — ${findings.length} finding(s), ${findings.filter((finding) => finding.status === 'contradicted').length} contradicted, ${omissions.length} omission(s)`,
+          );
+        }
       } else {
         this.logger.error(
           `Listing ${id}: no draft produced, skipping verification`,

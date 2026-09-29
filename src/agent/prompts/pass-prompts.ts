@@ -131,7 +131,7 @@ ${TAXONOMY.replace(/^/gm, '  ')}
 
 Escalating a sound listing costs someone two minutes; publishing a wrong one costs a buyer money. When genuinely torn, escalate — but do not escalate to avoid deciding: a listing whose claims you checked and confirmed should go live.
 
-Everything you need is in front of you. Record your findings and call submit_review.`;
+Everything you need is in front of you. Record your findings and return your review.`;
 
 /** Pass A's opening turn: the submission, what loaded, and the category's vocabulary. */
 export function buildGenerateMessages(context: RunContext): LlmMessage[] {
