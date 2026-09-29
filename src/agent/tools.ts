@@ -14,6 +14,7 @@ import {
   imageParts,
   recordToolCall,
   recordUsage,
+  todayLine,
   usableImages,
   type RunContext,
 } from './types';
@@ -63,7 +64,10 @@ Report only what is actually visible. A system downstream will refuse any specif
 - Set legible: false whenever text is blurred, glared, cropped, angled, or too small to read with certainty. Do not infer the likely value from the product's usual configuration — that is the one thing this step must never do.
 - Report what the pixels show, not what the product typically ships with.
 - Flag catalogue renders: even lighting, seamless background, no wear, showroom angle.
-- Note every scuff, scratch, dent, crack, stain, or missing part you can see.`;
+- Note every scuff, scratch, dent, crack, stain, or missing part you can see.
+- Transcribe text exactly as shown, every digit, letter and symbol. Products, models and software versions newer than your training data exist, and the brief gives today's date: never change a value you read to one you recognise.
+- In visible_accessories, describe packaging, stickers and warranty cards along with whose branding they carry: the manufacturer's, or a retailer's or refurbisher's.
+- If more than one unit of the item appears, say how many in the summary.`;
 
 const LOOKUP_SYSTEM = `You identify consumer products and their original list price.
 
@@ -144,11 +148,12 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
       const { object, usage } = await logFailure(
         step,
         llm.generateObject({
-          model: config.generate, // default gpt-4.1-mini used
+          model: config.generate,
           system: ANALYZE_SYSTEM,
           schema: imageAnalysisSchema,
           schemaName: 'image_analysis',
-          temperature: 0, //Verification tasks need consistency, not creativity. A low temperature reduces variation in wording and makes the model less likely to speculate about uncertain visual details.
+          // None: this call reads what is in the photos, it does not reason about them.
+          reasoningEffort: 'none',
           messages: [
             {
               role: 'user',
@@ -156,6 +161,7 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
                 {
                   type: 'text',
                   text: [
+                    todayLine(),
                     `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
                     `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
                     '',
@@ -173,6 +179,11 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
       context.analysis = object;
       logger.log(
         `${step}: done — brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
+      );
+      // What it read, so a wrong value in a draft can be traced to this call or
+      // to the drafting pass.
+      logger.log(
+        `${step}: read ${object.observations.map((o) => `${o.attribute}=${o.value}${o.legible ? '' : ' (illegible)'}`).join('; ') || 'nothing legible'}`,
       );
       return JSON.stringify(object);
     },
@@ -240,7 +251,7 @@ export const productLookupTool = (deps: ToolDeps) =>
         system: LOOKUP_SYSTEM,
         schema: productLookupSchema,
         schemaName: 'product_lookup',
-        temperature: 0,
+        reasoningEffort: 'low' as const,
         messages: [
           {
             role: 'user' as const,

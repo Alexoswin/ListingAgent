@@ -134,8 +134,10 @@ export class AgentService {
           productLookupTool(deps), // Looks up a product's canonical specs and its original MRP
         ],
         maxSteps: 8,
-        // Low: near-deterministic drafting. The verify pass runs at zero.
-        temperature: 0.2,
+        // Medium: drafting has to weigh photos, lookups and seller claims
+        // against each other, and at low effort it kept values that contradicted
+        // its own evidence. The verify pass stays above it, at high.
+        reasoningEffort: 'medium',
         context,
         label: `generate:${listing.listing_id}`,
         stage: 'generation',
@@ -154,10 +156,9 @@ export class AgentService {
           outputType: reviewSchema,
           // No tools, so the review arrives on the first turn or not at all.
           maxSteps: 1,
-          // Zero: the same draft and photos should get the same review, so every
-          // listing is judged the same way. The API does not promise identical
-          // output even at zero, but nothing gets closer.
-          temperature: 0,
+          // High, above the drafting pass: it runs on the same model, so it has
+          // to work harder than the drafter to be a real check on it.
+          reasoningEffort: 'high',
           context,
           label: `verify:${listing.listing_id}`,
           stage: 'validation',
@@ -230,9 +231,9 @@ export class AgentService {
       !draft && 'No draft was produced.',
       !review && 'No review was produced.',
       contradicted.length > 0 &&
-        `Review contradicted: ${contradicted.map((finding) => finding.claim).join('; ')}.`,
+        `Review contradicted: ${contradicted.map((finding) => finding.claim.replace(/[.\s]+$/, '')).join('; ')}.`,
       (review?.omissions.length ?? 0) > 0 &&
-        `Review found omissions: ${review?.omissions.join('; ')}.`,
+        `Review found omissions: ${review?.omissions.map((omission) => omission.replace(/[.\s]+$/, '')).join('; ')}.`,
     ].filter((reason): reason is string => typeof reason === 'string');
 
     const verdict: Verdict =

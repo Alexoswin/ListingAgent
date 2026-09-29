@@ -1,23 +1,27 @@
 import type { ConfigService } from '@nestjs/config';
 
 /**
- * The passes run on different models on purpose: a second opinion from the
- * same model on the same photo is barely a second opinion, because the priors
- * that produced the first reading produce the second one too. Two models from
- * one family share training data, so this decorrelates the passes less than two
- * vendors would.
+ * Both passes run on the same model, to keep cost down. That is a trade-off: a
+ * second opinion from the same model on the same photo is barely a second
+ * opinion, because the priors that produced the first reading produce the
+ * second one too. What keeps the verify pass independent is its separate
+ * context (it sees the photos and the draft, none of the drafting reasoning)
+ * and a higher reasoning effort, not different weights. `decorrelated` reports
+ * which setup a run used.
+ *
+ * Both must be reasoning models: every call sends a reasoning effort, and
+ * none sends a temperature, which these models reject.
  *
  * Constants, not env vars: which model runs a pass is a code decision, and
- * `.env` holds secrets only. Drafting runs on the cheaper model; verification
- * gets the stronger one.
+ * `.env` holds secrets only.
  */
-const GENERATE_MODEL: string = 'gpt-4.1-mini';
-const VERIFY_MODEL: string = 'gpt-4.1';
+const GENERATE_MODEL: string = 'gpt-5.6-luna';
+const VERIFY_MODEL: string = 'gpt-5.6-luna';
 
 export interface AgentConfig {
   /** Drafting pass, and the vision and lookup calls it makes. */
   generate: string;
-  /** Verification pass — a different model from `generate`. */
+  /** Verification pass. */
   verify: string;
   /**
    * True when the passes run on different models. When false they share one

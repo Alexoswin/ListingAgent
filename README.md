@@ -59,7 +59,7 @@ Then edit `.env`:
 
 `.env.example` lists only the keys you have to fill in. Every other variable in the table below has a default; add it to `.env` only to override that default. If you add one, give it a value: a line like `JWT_SECRET=` sets it to an empty string, which is used as-is instead of the default.
 
-The models are not env vars. They are constants in [`agent.config.ts`](src/agent/agent.config.ts): `gpt-4.1-mini` for drafting (plus the `analyze_images` and `product_lookup` calls, so it must accept images and support OpenAI's hosted `web_search` tool) and `gpt-4.1` for verification (must accept images).
+The models are not env vars. They are constants in [`agent.config.ts`](src/agent/agent.config.ts): `gpt-5.6-luna` for both drafting (plus the `analyze_images` and `product_lookup` calls, so it must accept images and support OpenAI's hosted `web_search` tool) and verification (must accept images). Both must be reasoning models: every call sends a reasoning effort instead of a temperature.
 
 ## Environment variables
 
@@ -145,7 +145,7 @@ npx ts-node src/scripts/seed-listings.ts   # inserts a dummy seller and 20 dummy
 | Framework | [NestJS](https://nestjs.com/) 11 |
 | Agent loop | [`@openai/agents`](https://github.com/openai/openai-agents-js) (OpenAI Agents SDK) |
 | Model calls inside tools | [`openai`](https://github.com/openai/openai-node) SDK — Chat Completions for vision, Responses API for web search |
-| Models | `gpt-4.1-mini` (drafting, vision, lookup) and `gpt-4.1` (verification), set in [`agent.config.ts`](src/agent/agent.config.ts) |
+| Models | `gpt-5.6-luna` for drafting, vision, lookup and verification, set in [`agent.config.ts`](src/agent/agent.config.ts) |
 | Schemas | [Zod](https://zod.dev/) 4, sent to OpenAI as strict JSON Schema structured output |
 | Images | [sharp](https://sharp.pixelplumbing.com/), to shrink photos before they reach a model |
 | Database | MongoDB via Mongoose (HTTP server only) |
@@ -161,10 +161,10 @@ Both entry points end up in the same function, `AgentService.runListing(listing)
 flowchart TD
     IN["Seller listing<br/>(CLI: data/listings.json · HTTP: POST /listings/generate)"] --> FETCH
     FETCH["1. Fetch images<br/>download + validate every URL once"] --> A
-    A["2. Pass A — Generate<br/>gpt-4.1-mini · up to 8 turns<br/>tools: analyze_images, product_lookup<br/>answers with the draft (structured output)"]
+    A["2. Pass A — Generate<br/>gpt-5.6-luna · medium effort · up to 8 turns<br/>tools: analyze_images, product_lookup<br/>answers with the draft (structured output)"]
     A -->|draft submitted| B
     A -->|no draft| GATE
-    B["3. Pass B — Verify<br/>gpt-4.1 · single turn<br/>sees seller data + draft + photos,<br/>plus lookup results<br/>no tools, structured output"]
+    B["3. Pass B — Verify<br/>gpt-5.6-luna · high effort · single turn<br/>sees seller data + draft + photos,<br/>plus lookup results<br/>no tools, structured output"]
     B --> GATE
     GATE["4. Verdict gate (plain code, no model)<br/>can only tighten the reviewer's verdict"]
     GATE --> OUT["ListingResult<br/>generated_pdp · review · publish · diagnostics"]
@@ -184,9 +184,8 @@ A photo already within bounds is sent exactly as it came. A photo sharp can't de
 
 Why 1536 px:
 
-- **It roughly halves image tokens on the drafting model.** gpt-4.1-mini charges for an image by its pixel area. Measured on real listing photos, a full-size phone photo costs 3,600–5,000 tokens there and 2,100–2,800 at 1536 px.
-- **The verifier loses nothing.** gpt-4.1 scales every image to 768 px on its short side before reading it, so it gets the same pixels and the same token count at 1536 px as at full size.
-- **The drafting pass still reads labels at a higher resolution than the pass that checks them.**
+- **Every call that attaches the photos pays for them by size**, and a phone photo sent whole is several times larger than it needs to be.
+- **Small print stays readable.** Spec labels and settings screens are still legible at 1536 px; on gpt-5.6-luna a 1050×1400 settings screenshot costs about 1,800 input tokens.
 
 Each image keeps its position in the listing's `images` array as its index. That index is how a specification cites the photo it was read from. Images that failed to load are described to the model as text ("did not load, cannot be cited") and never attached.
 
@@ -198,7 +197,10 @@ The system prompt tells it to:
 
 - call `analyze_images` first;
 - call `product_lookup` for the original MRP, and to back up specs it could not read off the photos;
-- give every specification a source (`image` with an image index, `lookup`, or `seller`), and drop any spec it can't source;
+- give every specification a source (`image` with the index of the photo that shows it, `lookup`, or `seller`), and drop any spec it can't source, or any seller value the photos make implausible;
+- copy text off the photos exactly, and not "correct" an unfamiliar version or model to one it knows (the brief gives today's date);
+- describe packaging and accessories as they appear ("a Cashify-branded box", not "the original box"), and describe a refurbisher's or reseller's branding without concluding who sold or refurbished the unit;
+- say what the photos show when they show more than one unit;
 - separate visual condition (from the photos) from functional condition (usually the seller's word), and pick one of five tiers;
 - account for **every** value in the seller's `condition_details`, copied exactly, graded as `defect` / `reassurance` / `claim` / `not_a_disclosure`, and say where each ended up in the listing;
 - keep or correct the seller's category and subcategory, using only the fixed taxonomy.
@@ -209,7 +211,7 @@ If the model runs out of turns, or its answer fails the schema or is a refusal, 
 
 ### 3. Pass B — Verify
 
-If a draft exists, a second agent reviews it, on a different model. Its first message holds:
+If a draft exists, a second agent reviews it. It runs on the same model as Pass A, so its independence comes from its separate context and higher reasoning effort. Its first message holds:
 
 - the seller's original submission;
 - the draft;
@@ -218,21 +220,23 @@ If a draft exists, a second agent reviews it, on a different model. Its first me
 
 It does **not** see Pass A's reasoning, or what `analyze_images` concluded about the photos. The lookup results are what a search returned rather than what the drafting model made of them, so they don't undo that separation.
 
-The reviewer checks each claim on its own terms:
+It looks for anything the listing would tell a buyer that is false or unsupported, and anything a buyer needs that it leaves out. Findings cover the draft's own statements; the status says whether the evidence supports each one:
 
-- An `image`-sourced spec is read off the cited photo.
+- An `image`-sourced spec is found in the photos. A value shown in a different photo from the one cited is still confirmed, and one the visible text itself establishes ("iPhone 12" on screen establishes Apple) counts too; one that is only typical for the product does not.
 - A `lookup` spec is checked against the product the photos show.
-- A `seller` spec is `unverifiable` unless a photo happens to confirm it.
+- A `seller` spec needs no finding unless a photo confirms or contradicts it. One the photos make implausible is contradicted.
 
 It also checks:
 
-- that every value in the seller's `condition_details` has a disclosure entry, copied exactly and graded honestly (a real defect graded as a mere "claim" counts as an omission);
-- that every fact the description asserts traces to a photo, a lookup result or a seller field, and that seller claims are worded as the seller's rather than as fact;
-- that `functional_condition` doesn't state as fact what the photos can't show — a working condition that rests on the seller must be worded as the seller's;
-- that every photo shows the actual unit rather than a catalogue image, and every image the draft cites actually loaded;
-- whether the tier, title, MRP and category fit the evidence, and the subcategory belongs to the chosen category.
+- that every defect the seller disclosed or the photos show appears in the listing, and that no real defect is graded as a mere claim or reassurance to bury it (both count as omissions);
+- that every statement a buyer would rely on — about this unit's condition, function, specs, contents, accessories, history or authenticity — traces to a photo, a lookup result or a seller field worded as the seller's;
+- that `functional_condition` doesn't state as fact what the photos can't show;
+- that at least one photo shows the actual unit, that the draft doesn't rely on a catalogue image for anything about this unit, and that the photos show the same item and quantity the listing sells;
+- whether each correction is backed by the evidence, and whether the tier, title, MRP and category fit it.
 
-It has no tools: it answers in a single turn, and its final message is validated against `reviewSchema` by the Agents SDK. If that message fails the schema, or the model refuses, the pass produces no review and the listing escalates. It runs at temperature 0, so the same draft and photos get the same review as far as the API allows; the drafting pass runs at 0.2. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
+Slips in the draft's own bookkeeping that don't change what a buyer reads — a spec cited to the wrong photo when another shows it, a non-defect disclosure such as "no bill" filed in the wrong place — go in the notes and don't hold the listing back.
+
+It has no tools: it answers in a single turn, and its final message is validated against `reviewSchema` by the Agents SDK. If that message fails the schema, or the model refuses, the pass produces no review and the listing escalates. It runs at reasoning effort `high`, above the drafting pass's `medium`: both passes use the same model, so the reviewer has to work harder than the drafter to be a check on it. The review holds per-claim findings (`confirmed` / `contradicted` / `unverifiable`), a list of omissions, a verdict, and notes. Findings come before the verdict in the schema, so the model records its evidence before it names a verdict.
 
 The reviewer does not run its own web search. Its MRP check rests on Pass A's lookup results, which are in its brief along with whether each came from the web or model knowledge.
 
@@ -259,20 +263,20 @@ The reviewer can escalate a listing but cannot publish one on its own authority.
 
 ### Cost per listing
 
-A listing makes up to 8 Pass A turns, one vision call, at most one web-search call per distinct `product_lookup`, and usually a single Pass B turn (3 at most). Every call's token usage, including calls made inside tools, is added up in `diagnostics.usage`. Per-pass figures are in `diagnostics.stages`, where a tool's calls count toward the pass that called it.
+A listing makes up to 8 Pass A turns, one vision call, at most one web-search call per distinct `product_lookup`, and a single Pass B turn. Every call's token usage, including calls made inside tools, is added up in `diagnostics.usage`. Per-pass figures are in `diagnostics.stages`, where a tool's calls count toward the pass that called it.
 
-Token counts are not cost. At OpenAI's list prices gpt-4.1 costs five times as much per token as gpt-4.1-mini, so a few thousand Pass B tokens can cost more than all of Pass A. Web search is also billed per call, on top of its tokens.
+Token counts are not cost. Both passes run on gpt-5.6-luna, and its reasoning is billed as output tokens even though it is never shown: at effort `high`, Pass B's reasoning is usually most of a listing's output tokens. Web search is also billed per call, on top of its tokens.
 
 Images are the largest input cost, so the agent is careful about where they go:
 
 | Call | Photos attached? |
 |---|---|
 | Pass A turns | No. Pass A sees the photos only through `analyze_images`. |
-| `analyze_images` | Yes, at up to 1536 px, since reading spec labels is the point. Runs once per listing and is cached after that. On gpt-4.1-mini this is usually the largest single call: about 2,100–2,800 tokens per photo. |
+| `analyze_images` | Yes, at up to 1536 px, since reading spec labels is the point. Runs once per listing and is cached after that. This is usually the largest single input: roughly 1,800 tokens per photo. |
 | `product_lookup` | Only when `analyze_images` could read neither a brand nor model text off the item. Otherwise it gets the analysis as text. |
 | Pass B | Yes, once, in its first message. |
 
-Pass B has no tools because the Agents SDK re-sends the whole conversation, photos included, on every turn. Each tool call would have paid for every photo again, on the more expensive model.
+Pass B has no tools because the Agents SDK re-sends the whole conversation, photos included, on every turn. Each tool call would have paid for every photo again.
 
 **Lookup cache.** `product_lookup` results are cached by brand, model and category. The key ignores case, punctuation and spacing, so `ASUS TUF-Gaming F15` and `asus tuf gaming f15` share an entry. A repeat product costs no model call and no search.
 
@@ -284,7 +288,7 @@ Pass B has no tools because the Agents SDK re-sends the whole conversation, phot
 
 | Tool | Pass | Arguments | What it does | Model call inside? |
 |---|---|---|---|---|
-| `analyze_images` | A | `listing_id` | Sends every usable photo to the drafting model (temperature 0) and returns structured observations: per-image notes (shows the product? stock/catalogue render?), brand and model text visible on the item, readable specs each marked `legible: true/false`, visible damage, and visible accessories. The result is cached for the listing, so a second call is free. If no image loaded, it says so and makes no call. | Yes — vision |
+| `analyze_images` | A | `listing_id` | Sends every usable photo to the drafting model (reasoning effort `none`, since it reads rather than reasons) and returns structured observations: per-image notes (shows the product? stock/catalogue render?), brand and model text visible on the item, readable specs each marked `legible: true/false`, visible damage, and visible accessories. The result is cached for the listing, so a second call is free. If no image loaded, it says so and makes no call. | Yes — vision |
 | `product_lookup` | A | `brand`, `model`, `category` | Finds the product's original launch price in INR and its manufacturer specs. Checks the [lookup cache](#cost-per-listing) first and returns a cached answer without any model call. Otherwise it uses OpenAI's hosted web search on the Responses API. At least one search is forced, and results are biased to India. The search gets what `analyze_images` read legibly (brand, model text, readable details, accessories) as text. The photos are attached only when nothing identifying was legible. If the search throws, it answers from model knowledge instead. The result is marked `lookup_web` only if the search returned at least one URL, otherwise `lookup_model_knowledge`. Returns up to 5 source URLs. | Yes — web search, unless cached |
 
 Tools don't pass data to each other through the model. They read and write a shared per-listing `RunContext`: images, image analysis, lookups, draft, review, token usage.
@@ -337,8 +341,8 @@ Illustrative example (trimmed; not copied from a real run):
   "diagnostics": {
     "images_submitted": 7,
     "images_loaded": 7,
-    "models": "gpt-4.1-mini → gpt-4.1",
-    "decorrelated": true,
+    "models": "gpt-5.6-luna → gpt-5.6-luna",
+    "decorrelated": false,
     "usage": { "inputTokens": 0, "outputTokens": 0 }
   }
 }

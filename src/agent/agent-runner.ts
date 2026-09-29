@@ -8,7 +8,7 @@ import {
   type FunctionTool,
 } from '@openai/agents';
 import type { z } from 'zod';
-import type { LlmMessage } from '../llm/llm.types';
+import type { LlmMessage, LlmReasoningEffort } from '../llm/llm.types';
 import type { AgentStage, RunContext } from './types';
 
 export interface PassOptions<T extends z.ZodType> {
@@ -21,8 +21,8 @@ export interface PassOptions<T extends z.ZodType> {
   tools?: FunctionTool<RunContext, any, any>[];
   /** Guards against a model that calls tools forever without answering. */
   maxSteps: number;
-  /** Sampling temperature for every turn of the pass. */
-  temperature: number;
+  /** Reasoning effort for every turn of the pass. */
+  reasoningEffort: LlmReasoningEffort;
   /** The per-listing state the tools read and write. */
   context: RunContext;
   label: string;
@@ -58,7 +58,7 @@ export async function runPass<T extends z.ZodType>(
     instructions: options.system,
     outputType: options.outputType,
     tools: options.tools ?? [],
-    modelSettings: { temperature: options.temperature },
+    modelSettings: { reasoning: { effort: options.reasoningEffort } },
   });
 
   // Wrapped here rather than letting `run()` wrap it, so the usage the SDK

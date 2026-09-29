@@ -103,8 +103,8 @@ export class LlmService {
           strict: true,
         },
       },
-      ...(request.temperature !== undefined && {
-        temperature: request.temperature,
+      ...(request.reasoningEffort !== undefined && {
+        reasoning: { effort: request.reasoningEffort },
       }),
       ...(request.maxOutputTokens !== undefined && {
         max_output_tokens: request.maxOutputTokens,
@@ -158,8 +158,8 @@ function baseParams(request: Omit<LlmRequest, 'tools'>): ChatParams {
       ...request.messages.map(toOpenAiMessage),
     ],
     // Optional settings are only sent when set, so OpenAI's defaults apply otherwise.
-    ...(request.temperature !== undefined && {
-      temperature: request.temperature,
+    ...(request.reasoningEffort !== undefined && {
+      reasoning_effort: request.reasoningEffort,
     }),
     ...(request.maxOutputTokens !== undefined && {
       max_completion_tokens: request.maxOutputTokens,

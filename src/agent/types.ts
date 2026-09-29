@@ -152,6 +152,14 @@ export const imageParts = (context: RunContext): LlmContentPart[] =>
     { type: 'image' as const, url: image.dataUrl as string },
   ]);
 
+/**
+ * Today's date, for every prompt that reads the photographs. A model's training
+ * data stops at some date, and without this it treats anything newer (an OS
+ * version, a model name) as a misreading and "corrects" it.
+ */
+export const todayLine = () =>
+  `Today's date: ${new Date().toISOString().slice(0, 10)}.`;
+
 /** A one-line summary of the listing's images, for both prompts. */
 export function describeImages(context: RunContext): string {
   const failed = context.images.filter((image) => !image.ok);

@@ -7,18 +7,21 @@ import type { z } from 'zod';
 export type LlmContentPart =
   { type: 'text'; text: string } | { type: 'image'; url: string };
 
+/** Reasoning effort levels the models in use accept. */
+export type LlmReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+
 /** One prompt turn: text, or text interleaved with images. */
 export type LlmMessage = { role: 'user'; content: string | LlmContentPart[] };
 
 /** Input for `generate()`. */
 export interface LlmRequest {
-  /** Which OpenAI model to use, e.g. 'gpt-4.1-mini'. */
+  /** Which OpenAI model to use, e.g. 'gpt-5.6-luna'. */
   model: string;
   /** Optional system prompt: instructions that frame the whole conversation. */
   system?: string;
   messages: LlmMessage[];
-  /** Lower values give more predictable output. */
-  temperature?: number;
+  /** How much the model reasons before answering. Reasoning models take this instead of a temperature. */
+  reasoningEffort?: LlmReasoningEffort;
   /** Upper limit on how many tokens the model may generate. */
   maxOutputTokens?: number;
 }

@@ -8,13 +8,10 @@ const MIN_IMAGE_BYTES = 2048;
 /**
  * Longest edge a photo is sent at.
  *
- * gpt-4.1-mini bills an image by its pixel area, so a phone photo sent whole
- * costs about 4,000–4,500 tokens; at 1536px it costs about 2,200–2,500. The
- * number is not arbitrary: gpt-4.1 scales every photo to 768px on its short
- * side before reading it, so the verification pass sees exactly what it saw
- * before, and the drafting pass still reads labels at a higher resolution
- * than the pass that checks them. Going lower would start taking detail away
- * from the verifier.
+ * Every model call that attaches the photos pays for them by size, and a phone
+ * photo sent whole is several times larger than it needs to be. 1536px still
+ * leaves the small print on a spec label or a settings screen readable; on
+ * gpt-5.6-luna a 1050×1400 settings screenshot costs about 1,800 input tokens.
  */
 const MAX_EDGE_PX = 1536;
 /** High enough that re-encoding does not blur the small print on a spec label. */
