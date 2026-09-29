@@ -98,7 +98,7 @@ export const productLookupSchema = z.strictObject({
     .describe('Caveats: variant ambiguity, price range, region differences.'),
 });
 
-/** The generated product page, and the arguments to `submit_draft`. */
+/** The generated product page: the drafting pass's structured output. */
 export const pdpSchema = z.strictObject({
   // Reasoning before the answer, as with the review's findings and verdict:
   // the model commits to what the photos show before it picks a bucket.

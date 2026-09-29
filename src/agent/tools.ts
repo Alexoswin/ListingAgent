@@ -7,7 +7,6 @@ import type { AgentConfig } from './agent.config';
 import { lookupKey, type ProductLookupCache } from './product-lookup-cache';
 import {
   imageAnalysisSchema,
-  pdpSchema,
   productLookupSchema,
   type ProductLookup,
 } from './schemas';
@@ -329,41 +328,3 @@ export const productLookupTool = (deps: ToolDeps) =>
       });
     },
   });
-
-/**
- * The only exit from the generation pass.
- *
- * Checking the draft is the verification pass's job, so this only makes sure it
- * has the right shape. A malformed draft goes back to the model to resubmit.
- */
-export const submitDraftTool = (deps: ToolDeps) =>
-  tool({
-    name: 'submit_draft',
-    description:
-      'Submit the finished listing. This ends drafting; an independent reviewer then checks it against the photographs and the seller submission.',
-    parameters: pdpSchema,
-    execute(args) {
-      const { context } = deps;
-      recordToolCall(context, 'submit_draft');
-      const step = tag(context, 'submit_draft');
-      const parsed = pdpSchema.safeParse(args);
-      if (!parsed.success) {
-        logger.warn(
-          `${step}: rejected, wrong shape (${parsed.error.issues.length} issue(s))`,
-        );
-        return `Draft rejected — wrong shape:\n${issues(parsed.error)}`;
-      }
-
-      context.draft = parsed.data;
-      context.finished = true;
-      logger.log(
-        `${step}: accepted — ${parsed.data.specifications.length} spec(s), tier ${parsed.data.condition.tier}`,
-      );
-      return 'Draft submitted for review.';
-    },
-  });
-
-const issues = (error: z.ZodError) =>
-  error.issues
-    .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
-    .join('\n');

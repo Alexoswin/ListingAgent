@@ -37,11 +37,7 @@ export interface ProductLookupResult extends ProductLookup {
   evidence: 'web' | 'model_knowledge';
 }
 
-export const AGENT_TOOL_NAMES = [
-  'analyze_images',
-  'product_lookup',
-  'submit_draft',
-] as const;
+export const AGENT_TOOL_NAMES = ['analyze_images', 'product_lookup'] as const;
 
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
 export type AgentStage = 'generation' | 'validation';
@@ -120,12 +116,6 @@ export interface RunContext {
   lookups: ProductLookupResult[];
   draft: GeneratedPdp | null;
   review: AgentReview | null;
-  /**
-   * Set by whichever tool ends a pass. The Agents SDK loop reads it once per
-   * turn to decide whether the pass is finished — a submission with the wrong
-   * shape leaves it false so the model can resubmit.
-   */
-  finished: boolean;
   usage: { inputTokens: number; outputTokens: number };
   activeStage: AgentStage | null;
   stats: AgentRunStats;
@@ -142,7 +132,6 @@ export function createRunContext(
     lookups: [],
     draft: null,
     review: null,
-    finished: false,
     usage: { inputTokens: 0, outputTokens: 0 },
     activeStage: null,
     stats: createAgentRunStats(),

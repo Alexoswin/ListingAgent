@@ -161,7 +161,7 @@ Both entry points end up in the same function, `AgentService.runListing(listing)
 flowchart TD
     IN["Seller listing<br/>(CLI: data/listings.json · HTTP: POST /listings/generate)"] --> FETCH
     FETCH["1. Fetch images<br/>download + validate every URL once"] --> A
-    A["2. Pass A — Generate<br/>gpt-4.1-mini · up to 8 turns<br/>tools: analyze_images, product_lookup, submit_draft"]
+    A["2. Pass A — Generate<br/>gpt-4.1-mini · up to 8 turns<br/>tools: analyze_images, product_lookup<br/>answers with the draft (structured output)"]
     A -->|draft submitted| B
     A -->|no draft| GATE
     B["3. Pass B — Verify<br/>gpt-4.1 · single turn<br/>sees seller data + draft + photos,<br/>plus lookup results<br/>no tools, structured output"]
@@ -203,9 +203,9 @@ The system prompt tells it to:
 - account for **every** value in the seller's `condition_details`, copied exactly, graded as `defect` / `reassurance` / `claim` / `not_a_disclosure`, and say where each ended up in the listing;
 - keep or correct the seller's category and subcategory, using only the fixed taxonomy.
 
-It finishes by calling `submit_draft`. That tool checks only the draft's shape: a draft that doesn't match the schema goes back to the model to resubmit, and a well-formed one is stored and ends the pass. Checking what the draft says is Pass B's job.
+It finishes by answering with the draft. Both passes use the Agents SDK's structured output: the schema (`pdpSchema` here, `reviewSchema` in Pass B) is sent as the response format on every turn, so each turn is either tool calls or the finished answer, and the SDK validates the answer against the schema. That checks only the draft's shape; checking what the draft says is Pass B's job.
 
-A pass ends only when a tool marks it finished. If the model runs out of turns, or replies in plain text without submitting, the pass counts as failed and there is no draft.
+If the model runs out of turns, or its answer fails the schema or is a refusal, the pass counts as failed and there is no draft.
 
 ### 3. Pass B — Verify
 
@@ -286,7 +286,6 @@ Pass B has no tools because the Agents SDK re-sends the whole conversation, phot
 |---|---|---|---|---|
 | `analyze_images` | A | `listing_id` | Sends every usable photo to the drafting model (temperature 0) and returns structured observations: per-image notes (shows the product? stock/catalogue render?), brand and model text visible on the item, readable specs each marked `legible: true/false`, visible damage, and visible accessories. The result is cached for the listing, so a second call is free. If no image loaded, it says so and makes no call. | Yes — vision |
 | `product_lookup` | A | `brand`, `model`, `category` | Finds the product's original launch price in INR and its manufacturer specs. Checks the [lookup cache](#cost-per-listing) first and returns a cached answer without any model call. Otherwise it uses OpenAI's hosted web search on the Responses API. At least one search is forced, and results are biased to India. The search gets what `analyze_images` read legibly (brand, model text, readable details, accessories) as text. The photos are attached only when nothing identifying was legible. If the search throws, it answers from model knowledge instead. The result is marked `lookup_web` only if the search returned at least one URL, otherwise `lookup_model_knowledge`. Returns up to 5 source URLs. | Yes — web search, unless cached |
-| `submit_draft` | A | the full draft (`pdpSchema`) | Validates the draft's shape and stores it; a malformed draft goes back to the model. The only way Pass A ends. | No |
 
 Tools don't pass data to each other through the model. They read and write a shared per-listing `RunContext`: images, image analysis, lookups, draft, review, token usage.
 
@@ -457,7 +456,7 @@ MongoDB collections (Mongoose schemas, all with `createdAt` / `updatedAt`):
 
 Stage token counts in `agentrunlogs` include tool calls only for runs from after that change. Older runs recorded only each pass's own turns, so their two stages add up to less than `totalInputTokens`. The gap is the vision and search calls.
 
-Tool-call counts in `agentrunlogs` are keyed by tool name, with every current tool present even at zero. Runs from before Pass B lost its tools also have a `check_draft` key, and can have non-zero `check_draft` and `product_lookup` counts under `validation`. Newer runs have no `check_draft` key, and every validation count is zero, since Pass B has no tools. Runs from before Pass B returned structured output also have a `submit_review` count of 1 under `validation`.
+Tool-call counts in `agentrunlogs` are keyed by tool name, with every current tool present even at zero. Runs from before Pass B lost its tools also have a `check_draft` key, and can have non-zero `check_draft` and `product_lookup` counts under `validation`. Newer runs have no `check_draft` key, and every validation count is zero, since Pass B has no tools. Runs from before both passes returned structured output also have `submit_draft` and `submit_review` keys, the tools each pass used to end with.
 
 ## Logging
 
@@ -480,8 +479,8 @@ Every step logs through Nest's `Logger`, and every line includes the listing id,
 ├── src/
 │   ├── agent/                      # the agent — no database dependency
 │   │   ├── agent.service.ts        # runListing(): fetch images → Pass A → Pass B → verdict gate; run(): concurrency pool
-│   │   ├── agent-runner.ts         # runPass(): Pass A, ended by a tool; runStructuredPass(): Pass B, one turn with structured output
-│   │   ├── tools.ts                # analyze_images, product_lookup, submit_draft
+│   │   ├── agent-runner.ts         # runPass(): one Agents SDK run that ends with a structured answer; both passes use it
+│   │   ├── tools.ts                # analyze_images, product_lookup
 │   │   ├── product-lookup-cache.ts # lookup cache: in memory, plus an optional persistent store
 │   │   ├── schemas.ts              # Zod schemas: image analysis, lookup, draft (pdpSchema), review
 │   │   ├── types.ts                # SellerListing, RunContext, Violation, image-part helpers

@@ -75,7 +75,7 @@ Keep the seller's choice when it fits. Move it only when the photographs plainly
 
 1. analyze_images first, always.
 2. product_lookup for the original MRP, and to corroborate specs you could not read.
-3. submit_draft, once, when the listing is finished. It ends drafting and goes straight to an independent reviewer who checks it against the photographs.`;
+3. When the listing is finished, return it as your answer. That ends drafting, and it goes straight to an independent reviewer who checks it against the photographs.`;
 
 export const VERIFY_SYSTEM = `You are checking a marketplace listing before it goes live. You did not write it and you know nothing about how it was produced.
 

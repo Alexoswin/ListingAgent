@@ -11,18 +11,14 @@ import {
   VERIFY_SYSTEM,
 } from './prompts/pass-prompts';
 import {
+  pdpSchema,
   reviewSchema,
   type AgentReview,
   type GeneratedPdp,
   type Verdict,
 } from './schemas';
-import { runPass, runStructuredPass } from './agent-runner';
-import {
-  analyzeImagesTool,
-  productLookupTool,
-  submitDraftTool,
-  type ToolDeps,
-} from './tools';
+import { runPass } from './agent-runner';
+import { analyzeImagesTool, productLookupTool, type ToolDeps } from './tools';
 import {
   createRunContext,
   usableImages,
@@ -128,18 +124,17 @@ export class AgentService {
     // Which pass was running, so a failure log says where it broke.
     let stage = 'generate';
     try {
-      await runPass({
+      context.draft = await runPass({
         model: this.config.generate,
         system: GENERATE_SYSTEM,
         messages: buildGenerateMessages(context),
+        outputType: pdpSchema,
         tools: [
           analyzeImagesTool(deps), //Reads the listing's images
           productLookupTool(deps), // Looks up a product's canonical specs and its original MRP
-          submitDraftTool(deps),
         ],
         maxSteps: 8,
-        // Low but not zero: near-deterministic, while still leaving a draft
-        // sent back for the wrong shape room to come back different.
+        // Low: near-deterministic drafting. The verify pass runs at zero.
         temperature: 0.2,
         context,
         label: `generate:${listing.listing_id}`,
@@ -147,12 +142,18 @@ export class AgentService {
       });
 
       if (context.draft) {
+        this.logger.log(
+          `Listing ${id}: draft — ${context.draft.specifications.length} spec(s), tier ${context.draft.condition.tier}`,
+        );
+
         stage = 'verify';
-        context.review = await runStructuredPass({
+        context.review = await runPass({
           model: this.config.verify,
           system: VERIFY_SYSTEM,
           messages: buildVerifyMessages(context),
           outputType: reviewSchema,
+          // No tools, so the review arrives on the first turn or not at all.
+          maxSteps: 1,
           // Zero: the same draft and photos should get the same review, so every
           // listing is judged the same way. The API does not promise identical
           // output even at zero, but nothing gets closer.
