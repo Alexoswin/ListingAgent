@@ -3,6 +3,7 @@ import { LlmModule } from '../llm/llm.module';
 import { AgentService } from './agent.service';
 import { ImageFetcher } from './image-fetcher';
 import { ProductLookupCache } from './product-lookup-cache';
+import { AgentTrace } from './trace';
 
 /**
  * The agent, with no database dependency: it reads a listing and returns a
@@ -14,7 +15,7 @@ import { ProductLookupCache } from './product-lookup-cache';
  */
 @Module({
   imports: [LlmModule],
-  providers: [AgentService, ImageFetcher, ProductLookupCache],
-  exports: [AgentService],
+  providers: [AgentService, ImageFetcher, ProductLookupCache, AgentTrace],
+  exports: [AgentService, AgentTrace],
 })
 export class AgentModule {}

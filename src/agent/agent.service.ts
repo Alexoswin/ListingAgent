@@ -18,6 +18,7 @@ import {
   type Verdict,
 } from './schemas';
 import { runPass } from './agent-runner';
+import { AgentTrace } from './trace';
 import { analyzeImagesTool, productLookupTool, type ToolDeps } from './tools';
 import {
   createRunContext,
@@ -59,6 +60,7 @@ export class AgentService {
     private readonly images: ImageFetcher,
     private readonly configService: ConfigService,
     private readonly lookupCache: ProductLookupCache,
+    private readonly trace: AgentTrace,
   ) {
     this.logger.log(
       `Product lookup cache: ${lookupCache.persistent ? 'persistent (Mongo)' : 'in memory only'}`,
@@ -103,113 +105,74 @@ export class AgentService {
    * brief instead.
    */
   async runListing(listing: SellerListing): Promise<ListingResult> {
-    const id = listing.listing_id;
-    const started = Date.now();
-    this.logger.log(
-      `Listing ${id}: started (${listing.category}${listing.subcategory ? ` / ${listing.subcategory}` : ''}, ${listing.images.length} image(s))`,
-    );
-
-    const context = createRunContext(
-      listing,
-      await this.images.fetchAll(listing.images),
-    );
-    this.logImages(context);
-    const deps: ToolDeps = {
-      llm: this.llm,
-      config: this.config,
-      context,
-      lookupCache: this.lookupCache,
-    };
-
-    // Which pass was running, so a failure log says where it broke.
-    let stage = 'generate';
+    const trace = this.trace.listing(listing);
     try {
-      context.draft = await runPass({
-        model: this.config.generate,
-        system: GENERATE_SYSTEM,
-        messages: buildGenerateMessages(context),
-        outputType: pdpSchema,
-        tools: [
-          analyzeImagesTool(deps), //Reads the listing's images
-          productLookupTool(deps), // Looks up a product's canonical specs and its original MRP
-        ],
-        maxSteps: 8,
-        // Medium: drafting has to weigh photos, lookups and seller claims
-        // against each other, and at low effort it kept values that contradicted
-        // its own evidence. The verify pass stays above it, at high.
-        reasoningEffort: 'medium',
+      const context = createRunContext(
+        listing,
+        await this.images.fetchAll(listing.images),
+        trace,
+      );
+      trace.loaded(context);
+      const deps: ToolDeps = {
+        llm: this.llm,
+        config: this.config,
         context,
-        label: `generate:${listing.listing_id}`,
-        stage: 'generation',
-      });
+        lookupCache: this.lookupCache,
+      };
 
-      if (context.draft) {
-        this.logger.log(
-          `Listing ${id}: draft — ${context.draft.specifications.length} spec(s), tier ${context.draft.condition.tier}`,
-        );
-
-        stage = 'verify';
-        context.review = await runPass({
-          model: this.config.verify,
-          system: VERIFY_SYSTEM,
-          messages: buildVerifyMessages(context),
-          outputType: reviewSchema,
-          // No tools, so the review arrives on the first turn or not at all.
-          maxSteps: 1,
-          // High, above the drafting pass: it runs on the same model, so it has
-          // to work harder than the drafter to be a real check on it.
-          reasoningEffort: 'high',
+      // Which pass was running, so a failure says where it broke.
+      let stage = 'generate';
+      try {
+        context.draft = await runPass({
+          model: this.config.generate,
+          system: GENERATE_SYSTEM,
+          messages: buildGenerateMessages(context),
+          outputType: pdpSchema,
+          tools: [
+            analyzeImagesTool(deps), //Reads the listing's images
+            productLookupTool(deps), // Looks up a product's canonical specs and its original MRP
+          ],
+          maxSteps: 8,
+          // Medium: drafting has to weigh photos, lookups and seller claims
+          // against each other, and at low effort it kept values that contradicted
+          // its own evidence. The verify pass stays above it, at high.
+          reasoningEffort: 'low',
           context,
-          label: `verify:${listing.listing_id}`,
-          stage: 'validation',
+          label: `generate:${listing.listing_id}`,
+          stage: 'generation',
+          describe: (draft) =>
+            `${draft.specifications.length} spec(s), tier ${draft.condition.tier}`,
         });
-        if (context.review) {
-          const { verdict, findings, omissions } = context.review;
-          this.logger.log(
-            `Listing ${id}: review ${verdict} — ${findings.length} finding(s), ${findings.filter((finding) => finding.status === 'contradicted').length} contradicted, ${omissions.length} omission(s)`,
-          );
+
+        if (context.draft) {
+          stage = 'verify';
+          context.review = await runPass({
+            model: this.config.verify,
+            system: VERIFY_SYSTEM,
+            messages: buildVerifyMessages(context),
+            outputType: reviewSchema,
+            // No tools, so the review arrives on the first turn or not at all.
+            maxSteps: 1,
+            // High, above the drafting pass: it runs on the same model, so it has
+            // to work harder than the drafter to be a real check on it.
+            reasoningEffort: 'medium',
+            context,
+            label: `verify:${listing.listing_id}`,
+            stage: 'validation',
+            describe: ({ verdict, findings, omissions }) =>
+              `${verdict} — ${findings.length} finding(s), ${findings.filter((finding) => finding.status === 'contradicted').length} contradicted, ${omissions.length} omission(s)`,
+          });
         }
-      } else {
-        this.logger.error(
-          `Listing ${id}: no draft produced, skipping verification`,
-        );
+      } catch (error) {
+        trace.failed(stage, error);
       }
-    } catch (error) {
-      this.logger.error(
-        `Listing ${id}: ${stage} pass failed: ${(error as Error).message}`,
-        (error as Error).stack,
-      );
-    }
 
-    const result = this.assemble(context);
-    const summary = `Listing ${id}: ${result.review.verdict} in ${Date.now() - started}ms (${context.usage.inputTokens} in / ${context.usage.outputTokens} out tokens)`;
-    if (result.publish) {
-      this.logger.log(summary);
-    } else {
-      // Escalating is the expected outcome for a doubtful listing, not a crash,
-      // so it is a warning; the reasons say whether anything actually broke.
-      this.logger.warn(
-        `${summary}: ${result.review.escalation_reasons.join(' ') || 'the reviewer asked for human review.'}`,
-      );
-    }
-    return result;
-  }
-
-  /** One line for the image fetch, at a level that matches how it went. */
-  private logImages(context: RunContext) {
-    const id = context.listing.listing_id;
-    const submitted = context.images.length;
-    const loaded = usableImages(context).length;
-    if (loaded === submitted) {
-      this.logger.log(`Listing ${id}: ${loaded} image(s) loaded`);
-    } else if (loaded === 0) {
-      this.logger.error(
-        `Listing ${id}: none of ${submitted} image(s) loaded, nothing can be verified visually`,
-      );
-    } else {
-      this.logger.warn(
-        `Listing ${id}: ${loaded} of ${submitted} image(s) loaded`,
-      );
+      const result = this.assemble(context);
+      trace.finished(result.review.verdict, result.review.escalation_reasons);
+      return result;
+    } finally {
+      // Off the live lines even when fetching the images threw.
+      trace.close();
     }
   }
 

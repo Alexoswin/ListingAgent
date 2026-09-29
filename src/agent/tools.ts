@@ -1,4 +1,3 @@
-import { Logger } from '@nestjs/common';
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 import type { LlmService } from '../llm/llm.service';
@@ -30,32 +29,9 @@ const listingIdArg = z.strictObject({
   listing_id: z.string().describe('The listing being processed.'),
 });
 
-const logger = new Logger('AgentTools');
-
 /** Tool arguments arrive as `unknown`; take a string or nothing. */
 const asText = (value: unknown) =>
   typeof value === 'string' ? value.trim() : '';
-
-/** Log prefix: which listing, which tool. */
-const tag = (context: RunContext, tool: string) =>
-  `${context.listing.listing_id} ${tool}`;
-
-/**
- * Logs a failed model call, then rethrows it. The Agents SDK catches a tool's
- * error and hands the model a generic message, so without this a failed vision
- * or lookup call would leave no trace in the logs.
- */
-async function logFailure<T>(step: string, pending: Promise<T>): Promise<T> {
-  try {
-    return await pending;
-  } catch (error) {
-    logger.error(
-      `${step}: failed: ${(error as Error).message}`,
-      (error as Error).stack,
-    );
-    throw error;
-  }
-}
 
 const ANALYZE_SYSTEM = `You are examining photographs of a second-hand item for a marketplace.
 
@@ -129,63 +105,71 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
     description:
       "Look at the listing's photographs and report what is visible: brand and model markings, readable specs, damage, accessories, and whether any image is a stock photo. Call this before drafting.",
     parameters: listingIdArg,
-    async execute() {
+    async execute(_input, _runContext, details) {
       const { context, config, llm } = deps;
       recordToolCall(context, 'analyze_images');
-      const step = tag(context, 'analyze_images');
-      if (context.analysis) {
-        logger.log(`${step}: reused the cached analysis`);
-        return JSON.stringify(context.analysis);
-      }
-      const images = usableImages(context).length;
-      if (images === 0) {
-        logger.warn(`${step}: no usable image, nothing to analyse`);
-        return 'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.';
-      }
+      // Reported to the trace, which prints the call with these notes once the
+      // SDK hands its output back to the model, and records a failure as one.
+      return context.trace.tool(
+        details?.toolCall?.callId,
+        'analyze_images',
+        async (note) => {
+          if (context.analysis) {
+            note('reused the cached analysis');
+            return JSON.stringify(context.analysis);
+          }
+          const images = usableImages(context).length;
+          if (images === 0) {
+            note('no usable image, nothing to analyse', 'warn');
+            return 'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.';
+          }
 
-      logger.log(`${step}: reading ${images} image(s)`);
-      const { seller, category, subcategory } = context.listing;
-      const { object, usage } = await logFailure(
-        step,
-        llm.generateObject({
-          model: config.generate,
-          system: ANALYZE_SYSTEM,
-          schema: imageAnalysisSchema,
-          schemaName: 'image_analysis',
-          // None: this call reads what is in the photos, it does not reason about them.
-          reasoningEffort: 'none',
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: [
-                    todayLine(),
-                    `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
-                    `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
-                    '',
-                    'Treat that as a claim to check, not a description to confirm. Report what you see.',
-                  ].join('\n'),
-                },
-                ...imageParts(context),
-              ],
-            },
-          ],
-        }),
-      );
+          const { seller, category, subcategory } = context.listing;
+          const { object, usage } = await llm.generateObject({
+            model: config.generate,
+            system: ANALYZE_SYSTEM,
+            schema: imageAnalysisSchema,
+            schemaName: 'image_analysis',
+            // None: this call reads what is in the photos, it does not reason about them.
+            reasoningEffort: 'none',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: [
+                      todayLine(),
+                      `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
+                      `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
+                      '',
+                      'Treat that as a claim to check, not a description to confirm. Report what you see.',
+                    ].join('\n'),
+                  },
+                  ...imageParts(context),
+                ],
+              },
+            ],
+          });
 
-      recordUsage(context, usage);
-      context.analysis = object;
-      logger.log(
-        `${step}: done — brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
+          recordUsage(context, usage);
+          context.analysis = object;
+          note(
+            `read ${images} image(s): brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
+          );
+          // What it read, so a wrong value in a draft can be traced to this call
+          // or to the drafting pass.
+          note(
+            object.observations
+              .map(
+                (o) =>
+                  `${o.attribute}=${o.value}${o.legible ? '' : ' (illegible)'}`,
+              )
+              .join('; ') || 'nothing legible',
+          );
+          return JSON.stringify(object);
+        },
       );
-      // What it read, so a wrong value in a draft can be traced to this call or
-      // to the drafting pass.
-      logger.log(
-        `${step}: read ${object.observations.map((o) => `${o.attribute}=${o.value}${o.legible ? '' : ' (illegible)'}`).join('; ') || 'nothing legible'}`,
-      );
-      return JSON.stringify(object);
     },
   });
 
@@ -215,127 +199,130 @@ export const productLookupTool = (deps: ToolDeps) =>
         .string()
         .describe('What kind of product, e.g. "gaming laptop".'),
     }),
-    async execute(args) {
+    async execute(args, _runContext, details) {
       const { context, config, llm, lookupCache } = deps;
       recordToolCall(context, 'product_lookup');
       const brand = asText(args.brand);
       const model = asText(args.model);
       const category = asText(args.category);
 
-      const step = tag(context, 'product_lookup');
-      if (!brand && !model) {
-        logger.warn(`${step}: no brand or model given, nothing to look up`);
-        return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
-      }
+      return context.trace.tool(
+        details?.toolCall?.callId,
+        'product_lookup',
+        async (note) => {
+          if (!brand && !model) {
+            note('no brand or model given, nothing to look up', 'warn');
+            return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
+          }
 
-      const product = [brand, model].filter(Boolean).join(' ');
-      const key = lookupKey(brand, model, category);
-      const cached = await lookupCache.get(key);
-      if (cached) {
-        context.lookups.push({ ...cached.lookup, evidence: cached.evidence });
-        logger.log(
-          `${step}: reused a cached lookup for "${product}" — ${cached.lookup.matched_product ?? 'no match'}, MRP ${cached.lookup.original_mrp_inr ?? 'not found'} (no model call)`,
-        );
-        return JSON.stringify({
-          ...cached.lookup,
-          sources: cached.sources,
-          cite_as: 'lookup_web',
-        });
-      }
+          const product = [brand, model].filter(Boolean).join(' ');
+          const key = lookupKey(brand, model, category);
+          const cached = await lookupCache.get(key);
+          if (cached) {
+            context.lookups.push({
+              ...cached.lookup,
+              evidence: cached.evidence,
+            });
+            note(
+              `reused a cached lookup for "${product}": ${cached.lookup.matched_product ?? 'no match'}, MRP ${cached.lookup.original_mrp_inr ?? 'not found'} (no model call)`,
+            );
+            return JSON.stringify({
+              ...cached.lookup,
+              sources: cached.sources,
+              cite_as: 'lookup_web',
+            });
+          }
 
-      const evidence = visualEvidence(context);
-      const attachPhotos = needsPhotos(context);
+          const evidence = visualEvidence(context);
+          const attachPhotos = needsPhotos(context);
 
-      const request = (instruction: string) => ({
-        model: config.generate,
-        system: LOOKUP_SYSTEM,
-        schema: productLookupSchema,
-        schemaName: 'product_lookup',
-        reasoningEffort: 'low' as const,
-        messages: [
-          {
-            role: 'user' as const,
-            content: [
+          const request = (instruction: string) => ({
+            model: config.generate,
+            system: LOOKUP_SYSTEM,
+            schema: productLookupSchema,
+            schemaName: 'product_lookup',
+            reasoningEffort: 'low' as const,
+            messages: [
               {
-                type: 'text' as const,
-                text: [
-                  `Identify: ${brand} ${model} (${category})`,
-                  evidence &&
-                    `\nWhat the photographs were read to show:\n${evidence}`,
-                  `\n${instruction}`,
-                ]
-                  .filter(Boolean)
-                  .join('\n'),
+                role: 'user' as const,
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: [
+                      `Identify: ${brand} ${model} (${category})`,
+                      evidence &&
+                        `\nWhat the photographs were read to show:\n${evidence}`,
+                      `\n${instruction}`,
+                    ]
+                      .filter(Boolean)
+                      .join('\n'),
+                  },
+                  // The photos help pin the variant when the model string is
+                  // vague, which is most of this dataset ("7420 7 series i7 11
+                  // generation") — but only when the analysis could not read
+                  // one off the item.
+                  ...(attachPhotos ? imageParts(context) : []),
+                ],
               },
-              // The photos help pin the variant when the model string is vague,
-              // which is most of this dataset ("7420 7 series i7 11 generation")
-              // — but only when the analysis could not read one off the item.
-              ...(attachPhotos ? imageParts(context) : []),
             ],
-          },
-        ],
-      });
+          });
 
-      logger.log(
-        `${step}: searching the web for "${product}" (${attachPhotos ? 'with photos, nothing legible to go on' : 'from the image analysis, no photos'})`,
-      );
-      let lookup: LlmWebSearchResponse<ProductLookup>;
-      try {
-        lookup = await llm.generateObjectWithWebSearch({
-          ...request(
-            'Search the web for its original launch price in India and its manufacturer specifications. Use only what the search results support; do not add specifications they do not mention.',
-          ),
-          searchCountry: 'IN',
-        });
-      } catch (error) {
-        logger.error(
-          `${step}: web search failed, falling back to model knowledge: ${(error as Error).message}`,
-          (error as Error).stack,
-        );
-        lookup = {
-          ...(await logFailure(
-            `${step} (fallback)`,
-            llm.generateObject(
-              request(
-                'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
+          note(
+            `searched the web for "${product}" ${attachPhotos ? 'with the photos, nothing legible to go on' : 'from the image analysis, no photos'}`,
+          );
+          let lookup: LlmWebSearchResponse<ProductLookup>;
+          try {
+            lookup = await llm.generateObjectWithWebSearch({
+              ...request(
+                'Search the web for its original launch price in India and its manufacturer specifications. Use only what the search results support; do not add specifications they do not mention.',
               ),
-            ),
-          )),
-          sources: [],
-        };
-      }
+              searchCountry: 'IN',
+            });
+          } catch (error) {
+            note(
+              `web search failed, falling back to model knowledge: ${(error as Error).message}`,
+              'warn',
+            );
+            lookup = {
+              ...(await llm.generateObject(
+                request(
+                  'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
+                ),
+              )),
+              sources: [],
+            };
+          }
 
-      const { object, usage, sources } = lookup;
-      // A search that came back empty grounded nothing, whatever the answer says.
-      const grounding = sources.length
-        ? ('web' as const)
-        : ('model_knowledge' as const);
+          const { object, usage, sources } = lookup;
+          // A search that came back empty grounded nothing, whatever the answer says.
+          const grounding = sources.length
+            ? ('web' as const)
+            : ('model_knowledge' as const);
 
-      recordUsage(context, usage);
-      context.lookups.push({ ...object, evidence: grounding });
-      // A search can return dozens of URLs; the draft only needs a few.
-      const cited = sources.slice(0, 5);
-      await lookupCache.set(key, {
-        lookup: object,
-        evidence: grounding,
-        sources: cited,
-      });
+          recordUsage(context, usage);
+          context.lookups.push({ ...object, evidence: grounding });
+          // A search can return dozens of URLs; the draft only needs a few.
+          const cited = sources.slice(0, 5);
+          await lookupCache.set(key, {
+            lookup: object,
+            evidence: grounding,
+            sources: cited,
+          });
 
-      const found = `${object.matched_product ?? 'no match'}, MRP ${object.original_mrp_inr ?? 'not found'}`;
-      if (grounding === 'web') {
-        logger.log(
-          `${step}: done — ${found}, from ${sources.length} web source(s)`,
-        );
-      } else {
-        logger.warn(
-          `${step}: done — ${found}, from model knowledge only (unverified)`,
-        );
-      }
+          const found = `${object.matched_product ?? 'no match'}, MRP ${object.original_mrp_inr ?? 'not found'}`;
+          if (grounding === 'web') {
+            note(`${found}, from ${sources.length} web source(s)`);
+          } else {
+            note(`${found}, from model knowledge only (unverified)`, 'warn');
+          }
 
-      return JSON.stringify({
-        ...object,
-        sources: cited,
-        cite_as: grounding === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
-      });
+          return JSON.stringify({
+            ...object,
+            sources: cited,
+            cite_as:
+              grounding === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
+          });
+        },
+      );
     },
   });

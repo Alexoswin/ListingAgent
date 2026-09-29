@@ -1,17 +1,20 @@
 import 'dotenv/config';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { Logger } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { Module } from '@nestjs/common';
 import { AgentModule } from '../agent/agent.module';
 import { AgentService } from '../agent/agent.service';
+import { AgentTrace } from '../agent/trace';
 import type { SellerListing } from '../agent/types';
 
 /**
  * CLI entrypoint:
  *   npm run agent -- --input data/listings.json --output output/results.json
+ *
+ * `--only 1,4` runs just those listings; `--verbose` prints the model's
+ * reasoning in full and tool arguments uncut.
  *
  * A standalone Nest context, not the HTTP app, so the run needs no database,
  * no port and no auth — only an API key.
@@ -33,7 +36,6 @@ function parseArgs(argv: string[]): Record<string, string> {
 }
 
 async function main() {
-  const logger = new Logger('RunAgent');
   const args = parseArgs(process.argv.slice(2));
   const inputPath = resolve(args.input || 'data/listings.json');
   const outputPath = resolve(args.output || 'output/results.json');
@@ -52,11 +54,18 @@ async function main() {
     logger: ['log', 'warn', 'error'],
   });
   const agent = app.get(AgentService);
+  const trace = app.get(AgentTrace);
+  trace.configure({
+    verbose: 'verbose' in args,
+    ids: listings.map((listing) => listing.listing_id),
+  });
+  trace.runStarted({
+    listings: listings.length,
+    concurrency: Math.max(1, agent.config.concurrency),
+    models: `${agent.config.generate} → ${agent.config.verify}`,
+  });
 
-  logger.log(
-    `${listings.length} listing(s) · ${agent.config.generate} → ${agent.config.verify}`,
-  );
-
+  const started = Date.now();
   const results = await agent.run(listings);
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(results, null, 2)}\n`);
@@ -70,10 +79,13 @@ async function main() {
     { inputTokens: 0, outputTokens: 0 },
   );
 
-  logger.log(
-    `${published} auto_publish, ${results.length - published} human_review_needed → ${outputPath}`,
-  );
-  logger.log(`Tokens: ${usage.inputTokens} in, ${usage.outputTokens} out`);
+  trace.runFinished({
+    published,
+    escalated: results.length - published,
+    usage,
+    durationMs: Date.now() - started,
+    output: outputPath,
+  });
   await app.close();
 }
 

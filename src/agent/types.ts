@@ -8,6 +8,7 @@ import type {
   ImageAnalysis,
   ProductLookup,
 } from './schemas';
+import type { ListingTrace } from './trace';
 
 /**
  * One raw submission from `data/listings.json`. Everything under `seller` is a
@@ -119,15 +120,19 @@ export interface RunContext {
   usage: { inputTokens: number; outputTokens: number };
   activeStage: AgentStage | null;
   stats: AgentRunStats;
+  /** Where the passes and tools report what they are doing, as they do it. */
+  trace: ListingTrace;
 }
 
 export function createRunContext(
   listing: SellerListing,
   images: FetchedImage[],
+  trace: ListingTrace,
 ): RunContext {
   return {
     listing,
     images,
+    trace,
     analysis: null,
     lookups: [],
     draft: null,
