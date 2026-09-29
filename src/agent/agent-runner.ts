@@ -15,45 +15,45 @@ import type { LlmMessage, LlmReasoningEffort } from '../llm/llm.types';
 import type { ListingTrace, TraceLevel } from './trace';
 import type { AgentStage, RunContext } from './types';
 
+/** Everything runPass needs to run one step. */
 export interface PassOptions<T extends z.ZodType> {
-  /** Which OpenAI model runs this pass. */
   model: string;
   system: string;
   messages: LlmMessage[];
-  /** What the pass returns. The SDK sends it as the response format on every turn and validates the answer against it. */
   outputType: T;
+  /** Tools the AI is allowed to use, like looking at photos or searching the web. */
   tools?: FunctionTool<RunContext, any, any>[];
-  /** Guards against a model that calls tools forever without answering. */
   maxSteps: number;
-  /** Reasoning effort for every turn of the pass. */
   reasoningEffort: LlmReasoningEffort;
-  /** The per-listing state the tools read and write. */
+  /** Info about the listing being worked on, shared with the tools. */
   context: RunContext;
   label: string;
+  /** Which step this is: 'generate' or 'verify'. */
   stage: AgentStage;
-  /** One line on the answer, for the trace. */
+  /** Turns the final answer into one short line for the terminal. */
   describe: (output: z.infer<T>) => string;
 }
 
 /**
- * The single agent pass both halves of the run use, on the Agents SDK's loop.
+ * Runs one step of the listing agent (Generate or Verify).
  *
- * The model calls tools until it is ready, then answers; the answer is the
- * pass's result, already validated against `outputType`. Every turn is held to
- * that format, so a turn is either tool calls or the finished answer.
+ * The AI can use tools as many times as it needs, then gives its final answer.
  *
- * Returns null when the pass runs out of turns without answering. An answer
- * that fails the schema, or a refusal, throws for the caller to report. Either
- * way the tokens it cost are counted.
+ * Returns the answer, or null if the AI ran out of turns.
  */
 export async function runPass<T extends z.ZodType>(
   options: PassOptions<T>,
 ): Promise<z.infer<T> | null> {
   const { context, label, stage } = options;
+
+  // Remember which step is running, so tokens used by tools are counted for this step.
   context.activeStage = stage;
   context.stats[stage].model = options.model;
+
+  // Note the start time, so we can work out how long the step took.
   const started = Date.now();
 
+  // Set up the AI agent: its model, instructions, tools, and answer shape.
   const agent = new Agent<RunContext, T>({
     name: label,
     model: options.model,
@@ -61,42 +61,51 @@ export async function runPass<T extends z.ZodType>(
     outputType: options.outputType,
     tools: options.tools ?? [],
     modelSettings: {
-      // The summary is what the trace shows of the model's thinking.
+      // 'summary' asks for a short note on what the AI is thinking, which we print.
       reasoning: { effort: options.reasoningEffort, summary: 'auto' },
     },
   });
 
-  // Wrapped here rather than letting `run()` wrap it, so the usage the SDK
-  // accumulates is readable during and after the run without reaching into
-  // run state.
+  // Wrap our listing info for the OpenAI library.
+  // Doing it ourselves lets us read the token count while the step is running.
   const wrapped = new SdkRunContext(context);
+
+  // Print the step's heading in the terminal, e.g. "⏺ Generate gpt-5.6-luna · reasoning low".
   context.trace.passStarted(
     stage,
     options.model,
     options.reasoningEffort,
     wrapped.usage,
   );
+
+  // The AI's final answer. Stays null until we get one.
   let output: z.infer<T> | null = null;
-  // Stays as is if the pass throws; the caller reports the error itself.
+
+  // The result we print at the end. We assume it failed until it succeeds.
   let outcome: { text: string; level: TraceLevel } = {
     text: 'failed',
     level: 'error',
   };
 
   try {
-    // Streamed so the trace shows each step as it happens. A failed run errors
-    // the stream, so the loop throws what `run()` would have.
+    // Start the AI. 'stream: true' means we get each step as soon as it happens.
     const result = await run(agent, toAgentInput(options.messages), {
       context: wrapped,
       maxTurns: options.maxSteps,
       stream: true,
     });
+
+    // Print each thing the AI does (thinking, calling a tool, getting a result) as it happens.
     for await (const event of result) {
       if (event.type === 'run_item_stream_event') {
         traceItem(context.trace, event.item);
       }
     }
+
+    // Wait until the AI is completely done.
     await result.completed;
+
+    // Take the final answer, or null if there isn't one.
     output = (result.finalOutput ?? null) as z.infer<T> | null;
     outcome =
       output === null
@@ -104,6 +113,7 @@ export async function runPass<T extends z.ZodType>(
         : { text: options.describe(output), level: 'ok' };
     return output;
   } catch (error) {
+    // The AI used all its turns without answering. Return null so a human reviews the listing.
     if (error instanceof MaxTurnsExceededError) {
       outcome = {
         text: `hit the ${options.maxSteps}-turn limit without answering`,
@@ -111,32 +121,42 @@ export async function runPass<T extends z.ZodType>(
       };
       return null;
     }
+    // Any other error is passed up for the caller to handle.
     throw error;
   } finally {
-    // A pass that fails cost tokens too.
+    // This always runs, even if something failed, because we pay for tokens either way.
+
+    // Add this step's tokens to the listing's total.
     context.usage.inputTokens += wrapped.usage.inputTokens;
     context.usage.outputTokens += wrapped.usage.outputTokens;
+
+    // Save this step's tokens, time taken, and whether it finished.
     context.stats[stage].inputTokens += wrapped.usage.inputTokens;
     context.stats[stage].outputTokens += wrapped.usage.outputTokens;
     context.stats[stage].durationMs = Date.now() - started;
     context.stats[stage].completed = output !== null;
+
+    // No step is running any more.
     context.activeStage = null;
+
+    // Print how the step ended, with its time and tokens.
     context.trace.passEnded(outcome, context.stats[stage]);
   }
 }
 
 /**
- * Hands the trace one step the SDK streamed. The SDK streams a turn's reasoning
- * and tool calls as soon as the model returns them, and the tools' outputs only
- * once they have all finished, so the trace prints in the order things happened.
+ * Prints one thing the AI did to the terminal:
+ * its thinking, a tool it called, or what a tool gave back.
  */
 function traceItem(trace: ListingTrace, item: RunItem) {
   if (item instanceof RunReasoningItem) {
+    // The AI's thinking, e.g. "✻ Crafting JSON specs".
     trace.reasoning(item.rawItem.content.map((part) => part.text));
   } else if (
     item instanceof RunToolCallItem &&
     item.rawItem.type === 'function_call'
   ) {
+    // The AI asked to use a tool, e.g. analyze_images.
     trace.toolCalled(
       item.rawItem.callId,
       item.rawItem.name,
@@ -146,13 +166,19 @@ function traceItem(trace: ListingTrace, item: RunItem) {
     item instanceof RunToolCallOutputItem &&
     item.rawItem.type === 'function_call_result'
   ) {
+    // The tool finished and gave back its result.
     trace.toolReturned(item.rawItem.callId, item.output);
   }
 }
 
-/** Our message shape to the SDK's input items. Only user turns start a pass. */
+/**
+ * Converts our messages into the format the OpenAI library expects.
+ * The content stays the same; only the labels change:
+ * 'text' becomes 'input_text', and 'image' becomes 'input_image'.
+ */
 function toAgentInput(messages: LlmMessage[]): AgentInputItem[] {
   return messages.flatMap((message): AgentInputItem[] => {
+    // Skip anything not sent by us. (This never happens now, because we only send user messages.)
     if (message.role !== 'user') {
       return [];
     }
@@ -160,6 +186,7 @@ function toAgentInput(messages: LlmMessage[]): AgentInputItem[] {
       {
         role: 'user',
         content:
+          // Plain text is sent as is. A list of text and photos is converted piece by piece.
           typeof message.content === 'string'
             ? message.content
             : message.content.map((part) =>

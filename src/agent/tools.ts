@@ -174,24 +174,25 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
   });
 
 /**
- * Looks up a product's canonical specs and its original MRP.
+ * A tool the AI can call to find a product's original price (MRP) and its specs.
  *
- * MRP is the one required field no photograph can supply — the seller's
- * `original_price` is blank across the dataset — so this is the only route to
- * it. It searches with OpenAI's hosted web search. If the search fails or finds
- * nothing, it answers from the model's own knowledge instead, and marks the
- * result so the draft has to label the price unverified.
+ * Why we need it: photos can't show what a product cost when new, and sellers
+ * usually leave that blank. So we look it up on the web.
  *
- * Web search is the most expensive call in a run, and marketplace inventory
- * repeats — so a product already looked up is served from the cache with no
- * model call at all. The search itself gets the image analysis as text rather
- * than the photographs; see `needsPhotos` for when it gets the pixels too.
+ * How it works:
+ * 1. If we looked up this product before, reuse that answer (free, no AI call).
+ * 2. If not, ask the AI to search the web.
+ * 3. If the web search fails, ask the AI to answer from what it already knows,
+ *    and mark the answer as "unverified".
  */
 export const productLookupTool = (deps: ToolDeps) =>
   tool({
+    // The name the AI uses to call this tool.
     name: 'product_lookup',
+    // Tells the AI what this tool does and when to use it.
     description:
       "Find a product's original list price when new (MRP) and its manufacturer specifications. Use it for the MRP, and to corroborate specs you could not read off the photos.",
+    // The details the AI must give us when it calls this tool.
     parameters: z.strictObject({
       brand: z.string().describe('Brand name, e.g. "ASUS".'),
       model: z.string().describe('Model as precisely as you know it.'),
@@ -199,26 +200,37 @@ export const productLookupTool = (deps: ToolDeps) =>
         .string()
         .describe('What kind of product, e.g. "gaming laptop".'),
     }),
+    // This runs every time the AI calls the tool.
     async execute(args, _runContext, details) {
       const { context, config, llm, lookupCache } = deps;
+
+      // Count this call in the run's stats.
       recordToolCall(context, 'product_lookup');
+
+      // Read the details the AI gave us, as plain text.
       const brand = asText(args.brand);
       const model = asText(args.model);
       const category = asText(args.category);
 
+      // Show this tool call in the terminal. Each note() adds a line under it.
       return context.trace.tool(
         details?.toolCall?.callId,
         'product_lookup',
         async (note) => {
+          // Without a brand or a model there is nothing to search for.
           if (!brand && !model) {
             note('no brand or model given, nothing to look up', 'warn');
             return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
           }
 
+          // The product's full name, e.g. "Nintendo Switch Lite MOD. HDH-001".
           const product = [brand, model].filter(Boolean).join(' ');
+
+          // Check whether we already looked up this product.
           const key = lookupKey(brand, model, category);
           const cached = await lookupCache.get(key);
           if (cached) {
+            // Found it: reuse the saved answer. No AI call and no web search.
             context.lookups.push({
               ...cached.lookup,
               evidence: cached.evidence,
@@ -226,6 +238,7 @@ export const productLookupTool = (deps: ToolDeps) =>
             note(
               `reused a cached lookup for "${product}": ${cached.lookup.matched_product ?? 'no match'}, MRP ${cached.lookup.original_mrp_inr ?? 'not found'} (no model call)`,
             );
+            // The cache only keeps answers that came from the web, so this is always 'lookup_web'.
             return JSON.stringify({
               ...cached.lookup,
               sources: cached.sources,
@@ -233,9 +246,13 @@ export const productLookupTool = (deps: ToolDeps) =>
             });
           }
 
+          // What the photos showed (brand, model text and so on), written as text.
           const evidence = visualEvidence(context);
+          // Send the photos too only if nothing readable was found on them.
           const attachPhotos = needsPhotos(context);
 
+          // Builds the message we send to the AI.
+          // Only the last instruction changes between the web search and the backup.
           const request = (instruction: string) => ({
             model: config.generate,
             system: LOOKUP_SYSTEM,
@@ -257,10 +274,8 @@ export const productLookupTool = (deps: ToolDeps) =>
                       .filter(Boolean)
                       .join('\n'),
                   },
-                  // The photos help pin the variant when the model string is
-                  // vague, which is most of this dataset ("7420 7 series i7 11
-                  // generation") — but only when the analysis could not read
-                  // one off the item.
+                  // Add the photos if needed. They help the AI work out the exact
+                  // version of the product when the model name is vague.
                   ...(attachPhotos ? imageParts(context) : []),
                 ],
               },
@@ -272,6 +287,7 @@ export const productLookupTool = (deps: ToolDeps) =>
           );
           let lookup: LlmWebSearchResponse<ProductLookup>;
           try {
+            // First try: ask the AI to search the web, preferring results from India.
             lookup = await llm.generateObjectWithWebSearch({
               ...request(
                 'Search the web for its original launch price in India and its manufacturer specifications. Use only what the search results support; do not add specifications they do not mention.',
@@ -279,6 +295,8 @@ export const productLookupTool = (deps: ToolDeps) =>
               searchCountry: 'IN',
             });
           } catch (error) {
+            // Backup: the web search failed, so ask the AI to answer from what it knows.
+            // There are no web links, so this answer counts as unverified.
             note(
               `web search failed, falling back to model knowledge: ${(error as Error).message}`,
               'warn',
@@ -294,21 +312,31 @@ export const productLookupTool = (deps: ToolDeps) =>
           }
 
           const { object, usage, sources } = lookup;
-          // A search that came back empty grounded nothing, whatever the answer says.
+
+          // Where did the answer come from? No web links means it came from
+          // the AI's own memory, whatever the answer says.
           const grounding = sources.length
             ? ('web' as const)
             : ('model_knowledge' as const);
 
+          // Count the tokens this used.
           recordUsage(context, usage);
+
+          // Save the answer for this listing.
           context.lookups.push({ ...object, evidence: grounding });
-          // A search can return dozens of URLs; the draft only needs a few.
+
+          // Keep only the first 5 web links. The draft doesn't need them all.
           const cited = sources.slice(0, 5);
+
+          // Save the answer so the next listing of the same product can reuse it.
+          // (The cache ignores answers that didn't come from the web.)
           await lookupCache.set(key, {
             lookup: object,
             evidence: grounding,
             sources: cited,
           });
 
+          // Print what we found in the terminal. Warn if it didn't come from the web.
           const found = `${object.matched_product ?? 'no match'}, MRP ${object.original_mrp_inr ?? 'not found'}`;
           if (grounding === 'web') {
             note(`${found}, from ${sources.length} web source(s)`);
@@ -316,6 +344,8 @@ export const productLookupTool = (deps: ToolDeps) =>
             note(`${found}, from model knowledge only (unverified)`, 'warn');
           }
 
+          // Send the answer back to the AI. 'cite_as' tells it which source
+          // label to use for the price in the listing.
           return JSON.stringify({
             ...object,
             sources: cited,
