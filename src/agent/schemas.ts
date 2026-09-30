@@ -90,8 +90,9 @@ export const productLookupSchema = z.strictObject({
     .number()
     .nullable()
     .describe('Launch price when new, in INR. Null if not found.'),
+  // a array of objects with key pair value 
   specifications: z.array(
-    z.strictObject({ key: z.string(), value: z.string() }),
+    z.strictObject({ key: z.string(), value: z.string() }), 
   ),
   notes: z
     .string()
