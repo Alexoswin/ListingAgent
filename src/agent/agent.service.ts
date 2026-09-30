@@ -132,7 +132,7 @@ export class AgentService {
             analyzeImagesTool(deps), //Reads the listing's images
             productLookupTool(deps), // Looks up a product's canonical specs and its original MRP
           ],
-          maxSteps: 8,
+          maxSteps: 4,
           // Medium: drafting has to weigh photos, lookups and seller claims
           // against each other, and at low effort it kept values that contradicted
           // its own evidence. The verify pass stays above it, at high.

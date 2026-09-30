@@ -90,9 +90,16 @@ export class LlmService {
               country: request.searchCountry,
             },
           }),
+          ...(request.searchContextSize && {
+            search_context_size: request.searchContextSize,
+          }),
         },
       ],
       tool_choice: 'required',
+      // Counts every built-in tool call; web search is the only one here.
+      ...(request.maxSearches !== undefined && {
+        max_tool_calls: request.maxSearches,
+      }),
       // Without this the response lists only the URLs the model chose to cite.
       include: ['web_search_call.action.sources'],
       text: {

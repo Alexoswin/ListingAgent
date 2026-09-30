@@ -13,7 +13,7 @@ import {
 import type { z } from 'zod';
 import type { LlmMessage, LlmReasoningEffort } from '../llm/llm.types';
 import type { ListingTrace, TraceLevel } from './trace';
-import type { AgentStage, RunContext } from './types';
+import { recordUsage, type AgentStage, type RunContext } from './types';
 
 /** Everything runPass needs to run one step. */
 export interface PassOptions<T extends z.ZodType> {
@@ -28,7 +28,7 @@ export interface PassOptions<T extends z.ZodType> {
   /** Info about the listing being worked on, shared with the tools. */
   context: RunContext;
   label: string;
-  /** Which step this is: 'generate' or 'verify'. */
+  /** Which step this is: 'generation' or 'validation'. */
   stage: AgentStage;
   /** Turns the final answer into one short line for the terminal. */
   describe: (output: z.infer<T>) => string;
@@ -44,18 +44,17 @@ export interface PassOptions<T extends z.ZodType> {
 export async function runPass<T extends z.ZodType>(
   options: PassOptions<T>,
 ): Promise<z.infer<T> | null> {
-  const { context, label, stage } = options;
+  const { context, stage } = options;
+  const stats = context.stats[stage];
 
   // Remember which step is running, so tokens used by tools are counted for this step.
   context.activeStage = stage;
-  context.stats[stage].model = options.model;
-
-  // Note the start time, so we can work out how long the step took.
+  stats.model = options.model;
   const started = Date.now();
 
   // Set up the AI agent: its model, instructions, tools, and answer shape.
   const agent = new Agent<RunContext, T>({
-    name: label,
+    name: options.label,
     model: options.model,
     instructions: options.system,
     outputType: options.outputType,
@@ -68,20 +67,17 @@ export async function runPass<T extends z.ZodType>(
 
   // Wrap our listing info for the OpenAI library.
   // Doing it ourselves lets us read the token count while the step is running.
-  const wrapped = new SdkRunContext(context);
+  const sdkContext = new SdkRunContext(context);
 
   // Print the step's heading in the terminal, e.g. "⏺ Generate gpt-5.6-luna · reasoning low".
   context.trace.passStarted(
     stage,
     options.model,
     options.reasoningEffort,
-    wrapped.usage,
+    sdkContext.usage,
   );
 
-  // The AI's final answer. Stays null until we get one.
-  let output: z.infer<T> | null = null;
-
-  // The result we print at the end. We assume it failed until it succeeds.
+  // How the step ended, printed at the end. Stays 'failed' if something throws.
   let outcome: { text: string; level: TraceLevel } = {
     text: 'failed',
     level: 'error',
@@ -90,7 +86,7 @@ export async function runPass<T extends z.ZodType>(
   try {
     // Start the AI. 'stream: true' means we get each step as soon as it happens.
     const result = await run(agent, toAgentInput(options.messages), {
-      context: wrapped,
+      context: sdkContext,
       maxTurns: options.maxSteps,
       stream: true,
     });
@@ -106,7 +102,8 @@ export async function runPass<T extends z.ZodType>(
     await result.completed;
 
     // Take the final answer, or null if there isn't one.
-    output = (result.finalOutput ?? null) as z.infer<T> | null;
+    const output = (result.finalOutput ?? null) as z.infer<T> | null;
+    stats.completed = output !== null;
     outcome =
       output === null
         ? { text: 'stopped without an answer', level: 'error' }
@@ -125,22 +122,15 @@ export async function runPass<T extends z.ZodType>(
     throw error;
   } finally {
     // This always runs, even if something failed, because we pay for tokens either way.
-
-    // Add this step's tokens to the listing's total.
-    context.usage.inputTokens += wrapped.usage.inputTokens;
-    context.usage.outputTokens += wrapped.usage.outputTokens;
-
-    // Save this step's tokens, time taken, and whether it finished.
-    context.stats[stage].inputTokens += wrapped.usage.inputTokens;
-    context.stats[stage].outputTokens += wrapped.usage.outputTokens;
-    context.stats[stage].durationMs = Date.now() - started;
-    context.stats[stage].completed = output !== null;
+    // Add this step's tokens to the listing's total and to this step's stats.
+    recordUsage(context, sdkContext.usage);
+    stats.durationMs = Date.now() - started;
 
     // No step is running any more.
     context.activeStage = null;
 
     // Print how the step ended, with its time and tokens.
-    context.trace.passEnded(outcome, context.stats[stage]);
+    context.trace.passEnded(outcome, stats);
   }
 }
 
@@ -173,28 +163,19 @@ function traceItem(trace: ListingTrace, item: RunItem) {
 
 /**
  * Converts our messages into the format the OpenAI library expects.
- * The content stays the same; only the labels change:
- * 'text' becomes 'input_text', and 'image' becomes 'input_image'.
+ * Only the labels change: 'text' becomes 'input_text', and 'image' becomes 'input_image'.
  */
 function toAgentInput(messages: LlmMessage[]): AgentInputItem[] {
-  return messages.flatMap((message): AgentInputItem[] => {
-    // Skip anything not sent by us. (This never happens now, because we only send user messages.)
-    if (message.role !== 'user') {
-      return [];
-    }
-    return [
-      {
-        role: 'user',
-        content:
-          // Plain text is sent as is. A list of text and photos is converted piece by piece.
-          typeof message.content === 'string'
-            ? message.content
-            : message.content.map((part) =>
-                part.type === 'text'
-                  ? { type: 'input_text' as const, text: part.text }
-                  : { type: 'input_image' as const, image: part.url },
-              ),
-      },
-    ];
-  });
+  return messages.map((message): AgentInputItem => ({
+    role: 'user',
+    content:
+      // Plain text is sent as is. A list of text and photos is converted piece by piece.
+      typeof message.content === 'string'
+        ? message.content
+        : message.content.map((part) =>
+            part.type === 'text'
+              ? { type: 'input_text' as const, text: part.text }
+              : { type: 'input_image' as const, image: part.url },
+          ),
+  }));
 }

@@ -54,6 +54,10 @@ export interface LlmObjectResponse<T> {
 export interface LlmWebSearchRequest<T> extends LlmObjectRequest<T> {
   /** ISO country code the search should favour, e.g. 'IN'. */
   searchCountry?: string;
+  /** How much of the search results the model reads. OpenAI's default is 'medium'; 'low' is cheaper and faster. */
+  searchContextSize?: 'low' | 'medium' | 'high';
+  /** The most searches the model may run for one answer. Any more are ignored. */
+  maxSearches?: number;
 }
 
 /** Result of `generateObjectWithWebSearch()`. */

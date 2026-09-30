@@ -1,14 +1,19 @@
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 import type { LlmService } from '../llm/llm.service';
-import type { LlmWebSearchResponse } from '../llm/llm.types';
+import type { LlmObjectRequest, LlmWebSearchResponse } from '../llm/llm.types';
 import type { AgentConfig } from './agent.config';
-import { lookupKey, type ProductLookupCache } from './product-lookup-cache';
+import {
+  lookupKey,
+  type CachedProductLookup,
+  type ProductLookupCache,
+} from './product-lookup-cache';
 import {
   imageAnalysisSchema,
   productLookupSchema,
   type ProductLookup,
 } from './schemas';
+import type { ToolNote } from './trace';
 import {
   imageParts,
   recordToolCall,
@@ -29,10 +34,6 @@ const listingIdArg = z.strictObject({
   listing_id: z.string().describe('The listing being processed.'),
 });
 
-/** Tool arguments arrive as `unknown`; take a string or nothing. */
-const asText = (value: unknown) =>
-  typeof value === 'string' ? value.trim() : '';
-
 const ANALYZE_SYSTEM = `You are examining photographs of a second-hand item for a marketplace.
 
 Report only what is actually visible. A system downstream will refuse any specification you cannot point at, so an honest "cannot read this" is worth more than a confident guess.
@@ -51,53 +52,17 @@ Return the price the product sold for NEW at launch, in INR, for the Indian mark
 
 If the model string covers several variants at different prices and you cannot tell which this is, return null for the price and explain the ambiguity. Null is the correct answer whenever the evidence does not single out one variant.`;
 
-/**
- * What `analyze_images` read off the photographs, as text for the lookup.
- *
- * Only legible observations: an illegible one is exactly the detail the
- * analysis refused to vouch for, and handing it to a search as if it were a
- * fact would launder a guess into a lookup result.
- */
-function visualEvidence(context: RunContext): string {
-  const analysis = context.analysis;
-  if (!analysis) {
-    return '';
-  }
-  const legible = analysis.observations.filter(
-    (observation) => observation.legible,
-  );
-  return [
-    analysis.observed_brand &&
-      `Brand visible on the item: ${analysis.observed_brand}`,
-    analysis.observed_model_text &&
-      `Model text visible on the item: ${analysis.observed_model_text}`,
-    legible.length > 0 &&
-      `Readable details: ${legible.map((observation) => `${observation.attribute}: ${observation.value}`).join('; ')}`,
-    analysis.visible_accessories.length > 0 &&
-      `Accessories in frame: ${analysis.visible_accessories.join(', ')}`,
-  ]
-    .filter((line): line is string => typeof line === 'string')
-    .join('\n');
-}
+/** The last line of the lookup request, when the AI can search the web. */
+const WEB_SEARCH_INSTRUCTION =
+  'Search the web for its original launch price in India and its manufacturer specifications. Use only what the search results support; do not add specifications they do not mention.';
+
+/** The last line of the lookup request, when the web search failed. */
+const FROM_MEMORY_INSTRUCTION =
+  'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.';
 
 /**
- * Whether the lookup needs the photographs themselves.
- *
- * Normally it does not: the analysis already turned the pixels into a brand and
- * model, which is what a search can use. The photos earn their tokens only when
- * the analysis could read neither off the item, and a second look is the only
- * way left to tell variants apart.
- */
-const needsPhotos = (context: RunContext) =>
-  !context.analysis ||
-  (!context.analysis.observed_brand && !context.analysis.observed_model_text);
-
-/**
- * Reads the listing's images.
- *
- * The URLs were fetched and validated before the agent started, so this spends
- * its vision call on images that exist. The result is cached on the context:
- * the drafting model often asks twice, and the photos do not change.
+ * A tool the AI can call to read the listing's photos: brand and model
+ * markings, readable specs, damage, accessories, and stock photos.
  */
 export const analyzeImagesTool = (deps: ToolDeps) =>
   tool({
@@ -106,72 +71,73 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
       "Look at the listing's photographs and report what is visible: brand and model markings, readable specs, damage, accessories, and whether any image is a stock photo. Call this before drafting.",
     parameters: listingIdArg,
     async execute(_input, _runContext, details) {
-      const { context, config, llm } = deps;
-      recordToolCall(context, 'analyze_images');
-      // Reported to the trace, which prints the call with these notes once the
-      // SDK hands its output back to the model, and records a failure as one.
-      return context.trace.tool(
+      // Count this call in the run's stats.
+      recordToolCall(deps.context, 'analyze_images');
+
+      // Show this tool call in the terminal. Each note() adds a line under it.
+      return deps.context.trace.tool(
         details?.toolCall?.callId,
         'analyze_images',
-        async (note) => {
-          if (context.analysis) {
-            note('reused the cached analysis');
-            return JSON.stringify(context.analysis);
-          }
-          const images = usableImages(context).length;
-          if (images === 0) {
-            note('no usable image, nothing to analyse', 'warn');
-            return 'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.';
-          }
-
-          const { seller, category, subcategory } = context.listing;
-          const { object, usage } = await llm.generateObject({
-            model: config.generate,
-            system: ANALYZE_SYSTEM,
-            schema: imageAnalysisSchema,
-            schemaName: 'image_analysis',
-            // None: this call reads what is in the photos, it does not reason about them.
-            reasoningEffort: 'none',
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'text',
-                    text: [
-                      todayLine(),
-                      `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
-                      `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
-                      '',
-                      'Treat that as a claim to check, not a description to confirm. Report what you see.',
-                    ].join('\n'),
-                  },
-                  ...imageParts(context),
-                ],
-              },
-            ],
-          });
-
-          recordUsage(context, usage);
-          context.analysis = object;
-          note(
-            `read ${images} image(s): brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
-          );
-          // What it read, so a wrong value in a draft can be traced to this call
-          // or to the drafting pass.
-          note(
-            object.observations
-              .map(
-                (o) =>
-                  `${o.attribute}=${o.value}${o.legible ? '' : ' (illegible)'}`,
-              )
-              .join('; ') || 'nothing legible',
-          );
-          return JSON.stringify(object);
-        },
+        (note) => analyzeImages(deps, note),
       );
     },
   });
+
+/** Asks the AI what the photos show and returns that as the tool's reply. */
+async function analyzeImages(
+  { context, config, llm }: ToolDeps,
+  note: ToolNote,
+): Promise<string> {
+  // The AI often asks twice, and the photos don't change: reuse the first answer.
+  if (context.analysis) {
+    note('reused the cached analysis');
+    return JSON.stringify(context.analysis);
+  }
+
+  const images = usableImages(context).length;
+  if (images === 0) {
+    note('no usable image, nothing to analyse', 'warn');
+    return 'No image loaded for this listing. Nothing can be verified visually; say so in the draft and keep the specifications to what the seller claims.';
+  }
+
+  const { seller, category, subcategory } = context.listing;
+  const text = [
+    todayLine(),
+    `Category: ${category}${subcategory ? ` / ${subcategory}` : ''}`,
+    `The seller says this is: ${[seller.brand, seller.model].filter(Boolean).join(' ') || 'unspecified'}`,
+    '',
+    'Treat that as a claim to check, not a description to confirm. Report what you see.',
+  ].join('\n');
+
+  const { object, usage } = await llm.generateObject({
+    model: config.generate,
+    system: ANALYZE_SYSTEM,
+    schema: imageAnalysisSchema,
+    schemaName: 'image_analysis',
+    // None: this call reads what is in the photos, it does not reason about them.
+    reasoningEffort: 'none',
+    messages: [
+      {
+        role: 'user',
+        content: [{ type: 'text', text }, ...imageParts(context)],
+      },
+    ],
+  });
+  recordUsage(context, usage);
+  context.analysis = object;
+
+  // Print what it read, so a wrong value in a draft can be traced back here.
+  note(
+    `read ${images} image(s): brand ${object.observed_brand ?? 'not visible'}, ${object.observations.length} observation(s), ${object.visible_damage.length} damage note(s)`,
+  );
+  note(
+    object.observations
+      .map((o) => `${o.attribute}=${o.value}${o.legible ? '' : ' (illegible)'}`)
+      .join('; ') || 'nothing legible',
+  );
+
+  return JSON.stringify(object);
+}
 
 /**
  * A tool the AI can call to find a product's original price (MRP) and its specs.
@@ -179,7 +145,7 @@ export const analyzeImagesTool = (deps: ToolDeps) =>
  * Why we need it: photos can't show what a product cost when new, and sellers
  * usually leave that blank. So we look it up on the web.
  *
- * How it works:
+ * How it works (the steps are in `lookUpProduct` below):
  * 1. If we looked up this product before, reuse that answer (free, no AI call).
  * 2. If not, ask the AI to search the web.
  * 3. If the web search fails, ask the AI to answer from what it already knows,
@@ -202,157 +168,231 @@ export const productLookupTool = (deps: ToolDeps) =>
     }),
     // This runs every time the AI calls the tool.
     async execute(args, _runContext, details) {
-      const { context, config, llm, lookupCache } = deps;
-
       // Count this call in the run's stats.
-      recordToolCall(context, 'product_lookup');
+      recordToolCall(deps.context, 'product_lookup');
 
-      // Read the details the AI gave us, as plain text.
-      const brand = asText(args.brand);
-      const model = asText(args.model);
-      const category = asText(args.category);
+      // The SDK has already checked these are strings; just trim the spaces.
+      const product: ProductQuery = {
+        brand: args.brand.trim(),
+        model: args.model.trim(),
+        category: args.category.trim(),
+      };
 
       // Show this tool call in the terminal. Each note() adds a line under it.
-      return context.trace.tool(
+      return deps.context.trace.tool(
         details?.toolCall?.callId,
         'product_lookup',
-        async (note) => {
-          // Without a brand or a model there is nothing to search for.
-          if (!brand && !model) {
-            note('no brand or model given, nothing to look up', 'warn');
-            return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
-          }
-
-          // The product's full name, e.g. "Nintendo Switch Lite MOD. HDH-001".
-          const product = [brand, model].filter(Boolean).join(' ');
-
-          // Check whether we already looked up this product.
-          const key = lookupKey(brand, model, category);
-          const cached = await lookupCache.get(key);
-          if (cached) {
-            // Found it: reuse the saved answer. No AI call and no web search.
-            context.lookups.push({
-              ...cached.lookup,
-              evidence: cached.evidence,
-            });
-            note(
-              `reused a cached lookup for "${product}": ${cached.lookup.matched_product ?? 'no match'}, MRP ${cached.lookup.original_mrp_inr ?? 'not found'} (no model call)`,
-            );
-            // The cache only keeps answers that came from the web, so this is always 'lookup_web'.
-            return JSON.stringify({
-              ...cached.lookup,
-              sources: cached.sources,
-              cite_as: 'lookup_web',
-            });
-          }
-
-          // What the photos showed (brand, model text and so on), written as text.
-          const evidence = visualEvidence(context);
-          // Send the photos too only if nothing readable was found on them.
-          const attachPhotos = needsPhotos(context);
-
-          // Builds the message we send to the AI.
-          // Only the last instruction changes between the web search and the backup.
-          const request = (instruction: string) => ({
-            model: config.generate,
-            system: LOOKUP_SYSTEM,
-            schema: productLookupSchema,
-            schemaName: 'product_lookup',
-            reasoningEffort: 'low' as const,
-            messages: [
-              {
-                role: 'user' as const,
-                content: [
-                  {
-                    type: 'text' as const,
-                    text: [
-                      `Identify: ${brand} ${model} (${category})`,
-                      evidence &&
-                        `\nWhat the photographs were read to show:\n${evidence}`,
-                      `\n${instruction}`,
-                    ]
-                      .filter(Boolean)
-                      .join('\n'),
-                  },
-                  // Add the photos if needed. They help the AI work out the exact
-                  // version of the product when the model name is vague.
-                  ...(attachPhotos ? imageParts(context) : []),
-                ],
-              },
-            ],
-          });
-
-          note(
-            `searched the web for "${product}" ${attachPhotos ? 'with the photos, nothing legible to go on' : 'from the image analysis, no photos'}`,
-          );
-          let lookup: LlmWebSearchResponse<ProductLookup>;
-          try {
-            // First try: ask the AI to search the web, preferring results from India.
-            lookup = await llm.generateObjectWithWebSearch({
-              ...request(
-                'Search the web for its original launch price in India and its manufacturer specifications. Use only what the search results support; do not add specifications they do not mention.',
-              ),
-              searchCountry: 'IN',
-            });
-          } catch (error) {
-            // Backup: the web search failed, so ask the AI to answer from what it knows.
-            // There are no web links, so this answer counts as unverified.
-            note(
-              `web search failed, falling back to model knowledge: ${(error as Error).message}`,
-              'warn',
-            );
-            lookup = {
-              ...(await llm.generateObject(
-                request(
-                  'No search results are available, so answer from your own knowledge and be conservative: return null rather than a half-remembered price.',
-                ),
-              )),
-              sources: [],
-            };
-          }
-
-          const { object, usage, sources } = lookup;
-
-          // Where did the answer come from? No web links means it came from
-          // the AI's own memory, whatever the answer says.
-          const grounding = sources.length
-            ? ('web' as const)
-            : ('model_knowledge' as const);
-
-          // Count the tokens this used.
-          recordUsage(context, usage);
-
-          // Save the answer for this listing.
-          context.lookups.push({ ...object, evidence: grounding });
-
-          // Keep only the first 5 web links. The draft doesn't need them all.
-          const cited = sources.slice(0, 5);
-
-          // Save the answer so the next listing of the same product can reuse it.
-          // (The cache ignores answers that didn't come from the web.)
-          await lookupCache.set(key, {
-            lookup: object,
-            evidence: grounding,
-            sources: cited,
-          });
-
-          // Print what we found in the terminal. Warn if it didn't come from the web.
-          const found = `${object.matched_product ?? 'no match'}, MRP ${object.original_mrp_inr ?? 'not found'}`;
-          if (grounding === 'web') {
-            note(`${found}, from ${sources.length} web source(s)`);
-          } else {
-            note(`${found}, from model knowledge only (unverified)`, 'warn');
-          }
-
-          // Send the answer back to the AI. 'cite_as' tells it which source
-          // label to use for the price in the listing.
-          return JSON.stringify({
-            ...object,
-            sources: cited,
-            cite_as:
-              grounding === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
-          });
-        },
+        (note) => lookUpProduct(deps, product, note),
       );
     },
   });
+
+/** The product the AI asked us to look up. */
+interface ProductQuery {
+  brand: string;
+  model: string;
+  category: string;
+}
+
+/** Runs the lookup steps and returns the tool's reply to the AI. */
+async function lookUpProduct(
+  deps: ToolDeps,
+  product: ProductQuery,
+  note: ToolNote,
+): Promise<string> {
+  const { context, lookupCache } = deps;
+  const { brand, model, category } = product;
+
+  // Without a brand or a model there is nothing to search for.
+  if (!brand && !model) {
+    note('no brand or model given, nothing to look up', 'warn');
+    return 'Nothing to look up: no brand or model given. If neither is known, leave original_mrp null.';
+  }
+
+  // The product's full name, e.g. "Nintendo Switch Lite MOD. HDH-001".
+  const name = [brand, model].filter(Boolean).join(' ');
+
+  // Step 1: if we looked up this product before, reuse that answer.
+  // No AI call and no web search.
+  ///---
+  const key = lookupKey(brand, model, category);
+  const cached = await lookupCache.get(key);
+  if (cached) {
+    note(
+      `reused a cached lookup for "${name}": ${summarize(cached.lookup)} (no model call)`,
+    );
+    return reply(context, cached);
+  }
+
+  //-- 
+
+  // Steps 2 and 3: ask the AI, with a web search if it works.
+  note(
+    `searched the web for "${name}" ${needsPhotos(context) ? 'with the photos, nothing legible to go on' : 'from the image analysis, no photos'}`,
+  );
+  // web search 
+  const { object, usage, sources } = await askAboutProduct(deps, product, note);
+  recordUsage(context, usage);
+
+  // The answer, in the same shape the cache stores.
+  const answer: CachedProductLookup = {
+    lookup: object,
+    // No web links means the answer came from the AI's own memory,
+    // whatever the answer says.
+    evidence: sources.length > 0 ? 'web' : 'model_knowledge',
+    // Keep only the first 5 web links. The draft doesn't need them all.
+    sources: sources.slice(0, 5),
+  };
+
+  // Save the answer so the next listing of the same product can reuse it.
+  // (The cache ignores answers that didn't come from the web.)
+  await lookupCache.set(key, answer);
+
+  // Print what we found in the terminal. Warn if it didn't come from the web.
+  if (answer.evidence === 'web') {
+    note(`${summarize(object)}, from ${sources.length} web source(s)`);
+  } else {
+    note(
+      `${summarize(object)}, from model knowledge only (unverified)`,
+      'warn',
+    );
+  }
+
+  return reply(context, answer);
+}
+
+/**
+ * Asks the AI about the product: with a web search first, and from its own
+ * knowledge if the search fails. The backup answer has no web links, which is
+ * how `lookUpProduct` knows it is unverified.
+ */
+async function askAboutProduct(
+  deps: ToolDeps,
+  product: ProductQuery,
+  note: ToolNote,
+): Promise<LlmWebSearchResponse<ProductLookup>> {
+  try {
+    // Search the web, preferring results from India.
+    return await deps.llm.generateObjectWithWebSearch({
+      ...lookupRequest(deps, product, WEB_SEARCH_INSTRUCTION),
+      searchCountry: 'IN',
+      // A launch price rarely needs more than two searches, and reading less
+      // of each result saves tokens and time on every uncached lookup.
+      searchContextSize: 'low',
+      maxSearches: 2,
+    });
+  } catch (error) {
+    // The fallback to model knowledge is off for now: pass the failure on.
+    // trace.tool prints it, and the SDK tells the AI the lookup failed.
+    // note(
+    //   `web search failed, falling back to model knowledge: ${(error as Error).message}`,
+    //   'warn',
+    // );
+    // const answer = await deps.llm.generateObject(
+    //   lookupRequest(deps, product, FROM_MEMORY_INSTRUCTION),
+    // );
+    // return { ...answer, sources: [] };
+    throw error;
+  }
+}
+
+/**
+ * Builds the request we send to the AI. The web search and the backup send
+ * the same request; only the last instruction changes.
+ */
+function lookupRequest(
+  { config, context }: ToolDeps,
+  { brand, model, category }: ProductQuery,
+  instruction: string,
+): LlmObjectRequest<ProductLookup> {
+  // What the photos showed (brand, model text and so on), written as text.
+  const evidence = visualEvidence(context);
+  const text = [
+    `Identify: ${brand} ${model} (${category})`,
+    evidence && `\nWhat the photographs were read to show:\n${evidence}`,
+    `\n${instruction}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  return {
+    model: config.generate,
+    system: LOOKUP_SYSTEM,
+    schema: productLookupSchema,
+    schemaName: 'product_lookup',
+    reasoningEffort: 'low',
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text },
+          // Send the photos too only if nothing readable was found on them.
+          // They help the AI work out the exact version of the product when
+          // the model name is vague.
+          ...(needsPhotos(context) ? imageParts(context) : []),
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * What `analyze_images` read off the photos, written as text for the lookup.
+ *
+ * Only the readable details: the analysis wasn't sure about the unreadable
+ * ones, and passing them to the search as facts would turn a guess into a
+ * "found" answer.
+ */
+function visualEvidence(context: RunContext): string {
+  const analysis = context.analysis;
+  if (!analysis) {
+    return '';
+  }
+  const legible = analysis.observations.filter((o) => o.legible);
+  return [
+    analysis.observed_brand &&
+      `Brand visible on the item: ${analysis.observed_brand}`,
+    analysis.observed_model_text &&
+      `Model text visible on the item: ${analysis.observed_model_text}`,
+    legible.length > 0 &&
+      `Readable details: ${legible.map((o) => `${o.attribute}: ${o.value}`).join('; ')}`,
+    analysis.visible_accessories.length > 0 &&
+      `Accessories in frame: ${analysis.visible_accessories.join(', ')}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Whether the lookup should get the photos too.
+ *
+ * Usually not: the brand and model read off the photos are enough to search
+ * with. The photos are only worth sending when neither could be read.
+ */
+function needsPhotos(context: RunContext): boolean {
+  return (
+    !context.analysis ||
+    (!context.analysis.observed_brand && !context.analysis.observed_model_text)
+  );
+}
+
+/**
+ * Saves the answer for this listing and writes the tool's reply to the AI.
+ * 'cite_as' tells the AI which source label to use for the price in the listing.
+ */
+function reply(
+  context: RunContext,
+  { lookup, evidence, sources }: CachedProductLookup,
+): string {
+  context.lookups.push({ ...lookup, evidence });
+  return JSON.stringify({
+    ...lookup,
+    sources,
+    cite_as: evidence === 'web' ? 'lookup_web' : 'lookup_model_knowledge',
+  });
+}
+
+/** One line for the terminal: the product it matched and its MRP. */
+function summarize(lookup: ProductLookup): string {
+  return `${lookup.matched_product ?? 'no match'}, MRP ${lookup.original_mrp_inr ?? 'not found'}`;
+}
